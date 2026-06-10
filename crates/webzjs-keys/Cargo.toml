@@ -36,9 +36,43 @@ pczt = { workspace = true, default-features = false, features = [
 ] }
 orchard = { version = "0.12", default-features = false }
 wasm-bindgen-futures = "0.4.43"
+serde.workspace = true
+serde-wasm-bindgen.workspace = true
+
+# Demo-only: building sample PCZTs for the connected wallet's UFVK. Gated behind
+# the `demo-builder` feature so they never bloat the production Snap WASM.
+rand = { version = "0.8", optional = true }
+secp256k1 = { version = "0.29", optional = true }
 
 # fixes "failed to resolve: use of undeclared crate or module `imp`" error
 getrandom = { workspace = true, features = ["js"] }
+
+[features]
+# Exposes `build_owned_demo_pczts` (src/demo_pczt.rs) — used only by the PoC demo
+# to construct per-pool sample PCZTs attributable to a given UFVK. Pulls the
+# transaction builders (`pczt/zcp-builder`) into the wasm build.
+demo-builder = ["dep:rand", "dep:secp256k1", "pczt/zcp-builder"]
+
+[dev-dependencies]
+# Used by tests/spoof_pczt.rs to build UFVKs and parse PCZT fixtures natively
+# against the inner (non-wasm) entry points.
+webzjs-common = { path = "../webzjs-common" }
+zcash_keys.workspace = true
+zip32.workspace = true
+# `zcp-builder` unlocks `Creator::build_from_parts`, used by tests/gen_fixtures.rs
+# to wrap an Orchard bundle into a `pczt::Pczt`. Dev-only: it pulls
+# `zcash_primitives` into `pczt` for the test build but never the wasm lib build.
+pczt = { workspace = true, default-features = false, features = [
+    "orchard",
+    "sapling",
+    "transparent",
+    "zcp-builder",
+] }
+# Seeded RNG for deterministic fixture generation (tests/gen_fixtures.rs).
+rand = "0.8"
+# Transparent fixture construction (tests/gen_fixtures.rs) derives a P2PKH pubkey
+# and spends it; `secp256k1` is already in the graph via `zcash_transparent`.
+secp256k1 = "0.29"
 
 [lints]
 workspace = true
