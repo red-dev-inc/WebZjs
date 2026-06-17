@@ -46,6 +46,13 @@ type PcztSummary = {
 /** Parse a ZEC decimal string into zatoshis, without floating-point error. */
 function zecToZats(zec: string): bigint {
   const [whole, fracRaw = ''] = zec.trim().split('.');
+  // ZEC has exactly 8 decimal places (zatoshis). Reject extra precision rather
+  // than silently truncating it — a truncated claim could otherwise match the
+  // verified amount and suppress the mismatch warning. See SECURITY_REPORT.md
+  // Finding 3.
+  if (fracRaw.length > 8) {
+    throw new Error(`amount has more than 8 decimal places: ${zec}`);
+  }
   const frac = (fracRaw + '00000000').slice(0, 8);
   return BigInt(whole || '0') * ZATS_PER_ZEC + BigInt(frac || '0');
 }

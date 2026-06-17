@@ -200,15 +200,27 @@ fn encode_sapling(network: &Network, addr: &sapling::PaymentAddress) -> Option<S
 
 /// True iff this Orchard spend is recoverable under `ofvk`.
 ///
-/// Prefers the strong check (the nullifier binds the exact note to our FVK);
-/// falls back to the FVK recorded on the spend when per-note fields have been
-/// redacted. Without an Orchard FVK we cannot attribute the spend at all.
+/// Attribution is made **only** via the nullifier bind: [`verify_nullifier`]
+/// reconstructs the full note from the spend's `(recipient, value, rho, rseed)`
+/// and checks both that `ofvk` scopes the recipient *and* that the note's
+/// nullifier matches the one published in the action. That cryptographically
+/// ties the exact note to our `nk`.
+///
+/// We deliberately do **not** fall back to comparing the spend's `fvk` field
+/// against `ofvk`. That field is attacker-suppliable: a malicious PCZT can
+/// "plant" the victim's FVK bytes onto a foreign note (with an intact but
+/// foreign recipient, or with the recipient redacted), which a byte-comparison
+/// fallback would then mis-attribute to the victim — defeating the
+/// foreign-input check that is the core invariant of [`pczt_validate_inner`].
+/// See `SECURITY_REPORT.md` Finding 1. A genuinely redacted spend cannot be
+/// proven or signed by us anyway, and its missing `value` independently trips
+/// the `value_missing` reject, so dropping the fallback loses no legitimate
+/// case. Without an Orchard FVK we cannot attribute the spend at all.
+///
+/// [`verify_nullifier`]: orchard::pczt::Spend::verify_nullifier
 fn orchard_spend_is_ours(spend: &orchard::pczt::Spend, ofvk: Option<&OrchardFvk>) -> bool {
     let Some(ofvk) = ofvk else { return false };
-    if spend.verify_nullifier(Some(ofvk)).is_ok() {
-        return true;
-    }
-    matches!(spend.fvk().as_ref(), Some(f) if f.to_bytes() == ofvk.to_bytes())
+    spend.verify_nullifier(Some(ofvk)).is_ok()
 }
 
 /// The BIP-44 account this Snap derives keys for (Zcash Snap convention: account 0).
@@ -275,7 +287,20 @@ fn analyze(
 
     let verifier = verifier
         .with_orchard::<Infallible, _>(|bundle| {
-            n_orchard_actions = bundle.actions().len() as u64;
+            // ZIP-317 logical actions, excluding fully-dummy padding the builder
+            // inserts (both spend and output value 0). Such padding is invisible
+            // in the display yet would otherwise inflate the fee band — see
+            // SECURITY_REPORT.md Finding 2. A real spend OR a real output makes
+            // an action count; counting only the spend (as the report proposed)
+            // would wrongly drop output-only actions (dummy spend + real output).
+            n_orchard_actions = bundle
+                .actions()
+                .iter()
+                .filter(|action| {
+                    action.spend().value().map(|v| v.inner()) != Some(0)
+                        || action.output().value().map(|v| v.inner()) != Some(0)
+                })
+                .count() as u64;
             for action in bundle.actions() {
                 let spend = action.spend();
                 let output = action.output();
@@ -313,11 +338,14 @@ fn analyze(
                 match output.value().map(|v| v.inner()) {
                     // Dummy padding output; not shown.
                     Some(0) => {}
-                    maybe_value => {
-                        let value = maybe_value.unwrap_or(0);
-                        if maybe_value.is_none() {
-                            value_missing = true;
-                        }
+                    // Redacted value: trip `value_missing` (so `pczt_validate`
+                    // rejects) but do NOT push a 0-ZEC entry into the display —
+                    // that would render as a misleading "0.00000000 ZEC" output
+                    // before the reject (SECURITY_REPORT.md Finding 4).
+                    None => {
+                        value_missing = true;
+                    }
+                    Some(value) => {
                         // Bind the displayed (recipient, value) to the signed cmx.
                         let verified = output.verify_note_commitment(spend).is_ok();
                         let recipient = output
@@ -375,11 +403,12 @@ fn analyze(
                 }
                 match output.value().map(|v| v.inner()) {
                     Some(0) => {}
-                    maybe_value => {
-                        let value = maybe_value.unwrap_or(0);
-                        if maybe_value.is_none() {
-                            value_missing = true;
-                        }
+                    // Redacted value: reject via `value_missing`, don't display a
+                    // 0-ZEC entry (SECURITY_REPORT.md Finding 4).
+                    None => {
+                        value_missing = true;
+                    }
+                    Some(value) => {
                         let verified = output.verify_note_commitment().is_ok();
                         let addr = output.recipient();
                         let recipient = addr.as_ref().and_then(|a| encode_sapling(&network, a));
