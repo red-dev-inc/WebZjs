@@ -230,6 +230,7 @@ pub fn extract_transaction_history(
                 }
             }
             zcash_client_backend::wallet::Recipient::EphemeralTransparent { .. } => "transparent",
+            zcash_client_backend::wallet::Recipient::InternalTransparent { .. } => "transparent",
             zcash_client_backend::wallet::Recipient::InternalAccount { note, .. } => {
                 match note.as_ref() {
                     zcash_client_backend::wallet::Note::Sapling(_) => "sapling",
