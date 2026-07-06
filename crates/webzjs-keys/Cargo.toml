@@ -34,7 +34,7 @@ pczt = { workspace = true, default-features = false, features = [
     "transparent",
     "tx-extractor",
 ] }
-orchard = { version = "0.12", default-features = false }
+orchard = { version = "0.14", default-features = false }
 wasm-bindgen-futures = "0.4.43"
 serde.workspace = true
 serde-wasm-bindgen.workspace = true
