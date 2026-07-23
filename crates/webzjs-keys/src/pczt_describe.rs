@@ -23,7 +23,7 @@ use wasm_bindgen::prelude::*;
 
 use orchard::keys::{FullViewingKey as OrchardFvk, Scope};
 use pczt::roles::verifier::Verifier;
-use webzjs_common::{pool, Network, Pczt, PcztOutputSummary, PcztSummary};
+use webzjs_common::{pool, MigrationSummary, Network, Pczt, PcztOutputSummary, PcztSummary};
 use zcash_keys::address::UnifiedAddress;
 use zcash_keys::encoding::AddressCodec;
 use zcash_transparent::address::TransparentAddress;
@@ -223,6 +223,114 @@ fn orchard_spend_is_ours(spend: &orchard::pczt::Spend, ofvk: Option<&OrchardFvk>
     spend.verify_nullifier(Some(ofvk)).is_ok()
 }
 
+/// Walk an Orchard-shaped bundle — either the Orchard pool or the NU6.3 Ironwood
+/// pool, which reuses the identical action/key/receiver shape — accumulating
+/// value, attribution, tampering flags, and one display row per real output into
+/// the shared accumulators. Returns this bundle's ZIP-317 logical-action count.
+///
+/// Ironwood is deliberately walked by the SAME code as Orchard: the whole point
+/// of the spoofing fix is that display and gate cannot diverge, and giving the
+/// two pools separate walks would reintroduce exactly that risk. `pool` is the
+/// only per-pool input, and it only tags the output row.
+#[allow(clippy::too_many_arguments)]
+fn analyze_orchard_like_bundle(
+    bundle: &orchard::pczt::Bundle,
+    pool: &str,
+    network: &Network,
+    ofvk: Option<&OrchardFvk>,
+    outputs: &mut Vec<PcztOutputSummary>,
+    total_in: &mut u64,
+    total_out: &mut u64,
+    foreign_input: &mut bool,
+    value_missing: &mut bool,
+    cv_mismatch: &mut bool,
+) -> u64 {
+    // ZIP-317 logical actions, excluding fully-dummy padding the builder inserts
+    // (both spend and output value 0). Such padding is invisible in the display
+    // yet would otherwise inflate the fee band — see SECURITY_REPORT.md Finding 2.
+    // A real spend OR a real output makes an action count; counting only the spend
+    // would wrongly drop output-only actions (dummy spend + real output).
+    let n_actions = bundle
+        .actions()
+        .iter()
+        .filter(|action| {
+            action.spend().value().map(|v| v.inner()) != Some(0)
+                || action.output().value().map(|v| v.inner()) != Some(0)
+        })
+        .count() as u64;
+
+    for action in bundle.actions() {
+        let spend = action.spend();
+        let output = action.output();
+
+        // --- spend side ---
+        match spend.value().map(|v| v.inner()) {
+            // Dummy padding spend; contributes nothing.
+            Some(0) => {}
+            Some(v) => {
+                if orchard_spend_is_ours(spend, ofvk) {
+                    *total_in += v;
+                } else {
+                    *foreign_input = true;
+                }
+            }
+            // Real spend with a redacted value: cannot balance or attribute.
+            None => {
+                *value_missing = true;
+                if !orchard_spend_is_ours(spend, ofvk) {
+                    *foreign_input = true;
+                }
+            }
+        }
+
+        // The value commitment binds the declared values to what is signed; a
+        // definite mismatch is tampering. Missing `rcv` or values just means we
+        // lean on the nullifier/cmx binds instead.
+        if let Err(orchard::pczt::VerifyError::InvalidValueCommitment) = action.verify_cv_net() {
+            *cv_mismatch = true;
+        }
+
+        // --- output side ---
+        match output.value().map(|v| v.inner()) {
+            // Dummy padding output; not shown.
+            Some(0) => {}
+            // Redacted value: trip `value_missing` (so `pczt_validate` rejects) but
+            // do NOT push a 0-ZEC entry into the display — that would render as a
+            // misleading "0.00000000 ZEC" output before the reject
+            // (SECURITY_REPORT.md Finding 4).
+            None => {
+                *value_missing = true;
+            }
+            Some(value) => {
+                // Bind the displayed (recipient, value) to the signed cmx.
+                let verified = output.verify_note_commitment(spend).is_ok();
+                let recipient = output
+                    .recipient()
+                    .as_ref()
+                    .and_then(|a| encode_orchard(network, a));
+                let scope = output
+                    .recipient()
+                    .as_ref()
+                    .and_then(|a| ofvk.and_then(|k| k.scope_for_address(a)));
+                let is_change = scope == Some(Scope::Internal);
+                let is_ours = scope.is_some();
+                *total_out += value;
+                outputs.push(PcztOutputSummary {
+                    pool: pool.into(),
+                    recipient,
+                    value,
+                    memo: None,
+                    is_change,
+                    is_ours,
+                    verified,
+                });
+            }
+        }
+    }
+
+    n_actions
+}
+
 /// The BIP-44 account this Snap derives keys for (Zcash Snap convention: account 0).
 const SNAP_ACCOUNT: u32 = 0;
 
@@ -258,6 +366,40 @@ fn transparent_addr_is_ours(
     })
 }
 
+/// Recognize a NU6.3 Path-A migration (ZIP 318 "Migrate Immediately") from the
+/// per-output summary. Returns `Some` iff the PCZT creates any Ironwood output —
+/// i.e. it moves value into the Ironwood pool. In the current Path-A-only world
+/// (no Ironwood scanning/spending yet), an Ironwood output can only be a
+/// migration, so this recognition is exact; when Ironwood-to-Ironwood payments
+/// later exist this heuristic will need the caller's intent to disambiguate.
+///
+/// The returned [`MigrationSummary`] drives the consent dialog; it does **not**
+/// gate signing — [`pczt_validate_inner`] already enforces the hard safety
+/// invariants (spends are ours, value balances / turnstile identity holds, every
+/// output is commitment-bound, fee is sane) for migrations as for any PCZT.
+fn detect_migration(outputs: &[PcztOutputSummary]) -> Option<MigrationSummary> {
+    let ironwood: Vec<&PcztOutputSummary> =
+        outputs.iter().filter(|o| o.pool == pool::IRONWOOD).collect();
+    if ironwood.is_empty() {
+        return None;
+    }
+    let amount = ironwood.iter().map(|o| o.value).sum();
+    // Self-migration iff every Ironwood output pays one of our own addresses.
+    let to_self = ironwood.iter().all(|o| o.is_ours);
+    // Clean Path A: the whole balance into a single Ironwood note, with any other
+    // output being change back to us — no third-party payments riding along.
+    let others_all_ours = outputs
+        .iter()
+        .filter(|o| o.pool != pool::IRONWOOD)
+        .all(|o| o.is_ours);
+    let is_clean_path_a = ironwood.len() == 1 && others_all_ours;
+    Some(MigrationSummary {
+        amount,
+        to_self,
+        is_clean_path_a,
+    })
+}
+
 /// Walk the PCZT once and accumulate the trusted-display summary plus the
 /// invariants [`pczt_validate_inner`] enforces.
 fn analyze(
@@ -277,6 +419,7 @@ fn analyze(
     let mut value_missing = false;
     let mut cv_mismatch = false;
     let mut n_orchard_actions: u64 = 0;
+    let mut n_ironwood_actions: u64 = 0;
     let mut n_sapling_actions: u64 = 0;
     let mut n_tin: u64 = 0;
     let mut n_tout: u64 = 0;
@@ -287,91 +430,49 @@ fn analyze(
 
     let verifier = verifier
         .with_orchard::<Infallible, _>(|bundle| {
-            // ZIP-317 logical actions, excluding fully-dummy padding the builder
-            // inserts (both spend and output value 0). Such padding is invisible
-            // in the display yet would otherwise inflate the fee band — see
-            // SECURITY_REPORT.md Finding 2. A real spend OR a real output makes
-            // an action count; counting only the spend (as the report proposed)
-            // would wrongly drop output-only actions (dummy spend + real output).
-            n_orchard_actions = bundle
-                .actions()
-                .iter()
-                .filter(|action| {
-                    action.spend().value().map(|v| v.inner()) != Some(0)
-                        || action.output().value().map(|v| v.inner()) != Some(0)
-                })
-                .count() as u64;
-            for action in bundle.actions() {
-                let spend = action.spend();
-                let output = action.output();
-
-                // --- spend side ---
-                match spend.value().map(|v| v.inner()) {
-                    // Dummy padding spend; contributes nothing.
-                    Some(0) => {}
-                    Some(v) => {
-                        if orchard_spend_is_ours(spend, ofvk) {
-                            total_in += v;
-                        } else {
-                            foreign_input = true;
-                        }
-                    }
-                    // Real spend with a redacted value: cannot balance or attribute.
-                    None => {
-                        value_missing = true;
-                        if !orchard_spend_is_ours(spend, ofvk) {
-                            foreign_input = true;
-                        }
-                    }
-                }
-
-                // The value commitment binds the declared values to what is
-                // signed; a definite mismatch is tampering. Missing `rcv` or
-                // values just means we lean on the nullifier/cmx binds instead.
-                if let Err(orchard::pczt::VerifyError::InvalidValueCommitment) =
-                    action.verify_cv_net()
-                {
-                    cv_mismatch = true;
-                }
-
-                // --- output side ---
-                match output.value().map(|v| v.inner()) {
-                    // Dummy padding output; not shown.
-                    Some(0) => {}
-                    // Redacted value: trip `value_missing` (so `pczt_validate`
-                    // rejects) but do NOT push a 0-ZEC entry into the display —
-                    // that would render as a misleading "0.00000000 ZEC" output
-                    // before the reject (SECURITY_REPORT.md Finding 4).
-                    None => {
-                        value_missing = true;
-                    }
-                    Some(value) => {
-                        // Bind the displayed (recipient, value) to the signed cmx.
-                        let verified = output.verify_note_commitment(spend).is_ok();
-                        let recipient = output
-                            .recipient()
-                            .as_ref()
-                            .and_then(|a| encode_orchard(&network, a));
-                        let is_change = output
-                            .recipient()
-                            .as_ref()
-                            .and_then(|a| ofvk.and_then(|k| k.scope_for_address(a)))
-                            == Some(Scope::Internal);
-                        total_out += value;
-                        outputs.push(PcztOutputSummary {
-                            pool: pool::ORCHARD.into(),
-                            recipient,
-                            value,
-                            memo: None,
-                            is_change,
-                            verified,
-                        });
-                    }
-                }
-            }
+            n_orchard_actions = analyze_orchard_like_bundle(
+                bundle,
+                pool::ORCHARD,
+                &network,
+                ofvk,
+                &mut outputs,
+                &mut total_in,
+                &mut total_out,
+                &mut foreign_input,
+                &mut value_missing,
+                &mut cv_mismatch,
+            );
             Ok(())
         })
         .map_err(|e| Error::PcztDescribe(format!("Invalid Orchard bundle: {e:?}")))?;
+
+    // NU6.3 / Ironwood. A v6 PCZT carries an `ironwood` bundle after the Orchard
+    // one. Ironwood reuses the Orchard action/key/receiver shape (same
+    // `orchard::pczt::Bundle`, same FVK/nullifier, same UA Orchard receiver), so
+    // it is walked by the *same* code as Orchard — display and gate cannot diverge
+    // between the two pools. The only differences are internal to the parsed
+    // bundle (v3 note plaintext, Ironwood note-encryption domain), which
+    // `with_ironwood`/`verify_note_commitment` already account for. Rows are tagged
+    // `pool = "ironwood"`. Was previously a hard "reject any Ironwood bundle" guard
+    // (there was no `.with_ironwood()` lens); now that upstream ships the lens, we
+    // describe and attribute it properly.
+    let verifier = verifier
+        .with_ironwood::<Infallible, _>(|bundle| {
+            n_ironwood_actions = analyze_orchard_like_bundle(
+                bundle,
+                pool::IRONWOOD,
+                &network,
+                ofvk,
+                &mut outputs,
+                &mut total_in,
+                &mut total_out,
+                &mut foreign_input,
+                &mut value_missing,
+                &mut cv_mismatch,
+            );
+            Ok(())
+        })
+        .map_err(|e| Error::PcztDescribe(format!("Invalid Ironwood bundle: {e:?}")))?;
 
     let verifier = verifier
         .with_sapling::<Infallible, _>(|bundle| {
@@ -433,6 +534,11 @@ fn analyze(
                             value,
                             memo: None,
                             is_change,
+                            // We only positively detect the internal (change) scope for
+                            // Sapling here; treat that as the extent of "ours". A
+                            // Path-A migration carries no Sapling outputs, so this only
+                            // affects the conservative `is_clean_path_a` check.
+                            is_ours: is_change,
                             verified,
                         });
                     }
@@ -480,6 +586,9 @@ fn analyze(
                     value,
                     memo: None,
                     is_change,
+                    // `is_change` here already means "pays one of our transparent
+                    // keys", i.e. ours.
+                    is_ours: is_change,
                     verified: true,
                 });
             }
@@ -489,8 +598,10 @@ fn analyze(
 
     let _ = verifier.finish();
 
-    let logical_actions = n_tin.max(n_tout) + n_sapling_actions + n_orchard_actions;
+    let logical_actions =
+        n_tin.max(n_tout) + n_sapling_actions + n_orchard_actions + n_ironwood_actions;
 
+    let migration = detect_migration(&outputs);
     let summary = PcztSummary {
         network: match network {
             Network::MainNetwork => "main".into(),
@@ -500,6 +611,7 @@ fn analyze(
         total_in,
         total_out,
         fee: total_in.saturating_sub(total_out),
+        migration,
     };
 
     Ok(Analysis {

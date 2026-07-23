@@ -1,4 +1,7 @@
+# Bumped from nightly-2025-01-07 (1.86) for NU6.3: librustzcash main (rev 0a2c6d1a) pins
+# rust 1.88 / edition 2024. We need nightly for the `-Z build-std` wasm build, so this is the
+# nightly that clears 1.88 (reports 1.89.0-nightly).
 [toolchain]
-channel = "nightly-2025-01-07"
+channel = "nightly-2025-06-15"
 components = ["rust-src"]
 targets = ["wasm32-unknown-unknown"]

@@ -25,9 +25,10 @@
 //! and `spoof_pczt.rs` agree on the addresses without hardcoding strings.
 
 use orchard::builder::{Builder, BundleType};
+use orchard::bundle::BundleVersion;
 use orchard::keys::{FullViewingKey, OutgoingViewingKey, Scope};
 use orchard::note::{ExtractedNoteCommitment, Note, RandomSeed, Rho};
-use orchard::tree::{MerkleHashOrchard, MerklePath};
+use orchard::tree::{Anchor, MerkleHashOrchard, MerklePath};
 use orchard::value::NoteValue;
 use orchard::Address;
 
@@ -72,8 +73,14 @@ fn orchard_fvk(seed: &[u8; 32]) -> FullViewingKey {
     .clone()
 }
 
-/// A spendable note owned by `fvk`, of the given value.
-fn make_note(rng: &mut StdRng, fvk: &FullViewingKey, value: u64) -> Note {
+/// A spendable note owned by `fvk`, of the given value, at the given note-plaintext
+/// version (V2 = Orchard pool, V3 = NU6.3 Ironwood pool).
+fn make_note_versioned(
+    rng: &mut StdRng,
+    fvk: &FullViewingKey,
+    value: u64,
+    version: orchard::note::NoteVersion,
+) -> Note {
     let recipient = fvk.address_at(0u32, Scope::External);
     // A small canonical field element is a fine `rho` for an off-chain note.
     let mut rho_bytes = [0u8; 32];
@@ -87,11 +94,17 @@ fn make_note(rng: &mut StdRng, fvk: &FullViewingKey, value: u64) -> Note {
             None => continue,
         };
         if let Some(note) =
-            Note::from_parts(recipient, NoteValue::from_raw(value), rho, rseed).into_option()
+            Note::from_parts(recipient, NoteValue::from_raw(value), rho, rseed, version)
+                .into_option()
         {
             break note;
         }
     }
+}
+
+/// A spendable Orchard (V2) note owned by `fvk`.
+fn make_note(rng: &mut StdRng, fvk: &FullViewingKey, value: u64) -> Note {
+    make_note_versioned(rng, fvk, value, orchard::note::NoteVersion::V2)
 }
 
 /// Build an Orchard-only PCZT spending one note under `spend_fvk` and creating
@@ -111,7 +124,15 @@ fn make_orchard_pczt(
     let path = MerklePath::from_parts(0, [sibling; 32]);
     let anchor = path.root(cmx);
 
-    let mut builder = Builder::new(BundleType::DEFAULT, anchor);
+    // orchard 0.15 (NU6.3): Builder::new now takes the bundle version (Orchard v2 here,
+    // i.e. the pre-Ironwood pool) and its flags, and is fallible.
+    let mut builder = Builder::new(
+        BundleType::DEFAULT,
+        BundleVersion::orchard_v2(),
+        BundleVersion::orchard_v2().default_flags(),
+        anchor,
+    )
+    .expect("Builder::new");
     builder
         .add_spend(spend_fvk.clone(), note, path)
         .expect("add_spend");
@@ -132,8 +153,123 @@ fn make_orchard_pczt(
         transparent: None,
         sapling: None,
         orchard: Some(bundle),
+        ironwood: None,
     };
     Creator::build_from_parts(parts).expect("build_from_parts (V5 is PCZT-compatible)")
+}
+
+/// Build an Ironwood-only (NU6.3, v6) PCZT spending one V3 note under `spend_fvk`
+/// and creating the given outputs. Mirrors `make_orchard_pczt` but targets the
+/// Ironwood pool: `BundleVersion::ironwood_v3()`, tx version V6, branch Nu6_3, and
+/// the bundle placed in `PcztParts.ironwood`. Exercises the `.with_ironwood()`
+/// describe/validate arm and `sign_ironwood`.
+fn make_ironwood_pczt(
+    rng: &mut StdRng,
+    spend_fvk: &FullViewingKey,
+    spend_value: u64,
+    outputs: &[(Option<OutgoingViewingKey>, Address, u64)],
+) -> pczt::Pczt {
+    let note = make_note_versioned(rng, spend_fvk, spend_value, orchard::note::NoteVersion::V3);
+    let cmx: ExtractedNoteCommitment = note.commitment().into();
+
+    let sibling = MerkleHashOrchard::from_cmx(&cmx);
+    let path = MerklePath::from_parts(0, [sibling; 32]);
+    let anchor = path.root(cmx);
+
+    let mut builder = Builder::new(
+        BundleType::DEFAULT,
+        BundleVersion::ironwood_v3(),
+        BundleVersion::ironwood_v3().default_flags(),
+        anchor,
+    )
+    .expect("Builder::new (ironwood)");
+    builder
+        .add_spend(spend_fvk.clone(), note, path)
+        .expect("add_spend");
+    for (ovk, recipient, value) in outputs {
+        builder
+            .add_output(ovk.clone(), *recipient, NoteValue::from_raw(*value), [0u8; 512])
+            .expect("add_output");
+    }
+
+    let (bundle, _meta) = builder.build_for_pczt(&mut *rng).expect("build_for_pczt");
+
+    let parts = PcztParts {
+        params: Network::TestNetwork,
+        version: TxVersion::V6,
+        consensus_branch_id: BranchId::Nu6_3,
+        lock_time: 0,
+        expiry_height: BlockHeight::from_u32(0),
+        transparent: None,
+        sapling: None,
+        orchard: None,
+        ironwood: Some(bundle),
+    };
+    Creator::build_from_parts(parts).expect("build_from_parts (ironwood-only V6)")
+}
+
+/// Build a **turnstile** Path-A migration PCZT (NU6.3, v6) — the real migration
+/// shape: an **Orchard** bundle spending one of our Orchard (V2) notes (value
+/// *leaving* Orchard → positive Orchard value balance) plus an **Ironwood** bundle
+/// with a single output (value *entering* Ironwood → negative Ironwood value
+/// balance), the two netting to a ZIP-317 fee. Unlike `make_ironwood_pczt` (a
+/// single-pool Ironwood tx), this crosses Orchard→Ironwood in one transaction,
+/// exactly as a ZIP-318 Path-A migration does.
+fn make_turnstile_migration_pczt(
+    rng: &mut StdRng,
+    spend_fvk: &FullViewingKey,
+    spend_value: u64,
+    out_ovk: Option<OutgoingViewingKey>,
+    out_addr: Address,
+    out_value: u64,
+) -> pczt::Pczt {
+    // --- Orchard side: spend one of our notes, no output. ---
+    let note = make_note(rng, spend_fvk, spend_value); // V2 Orchard note
+    let cmx: ExtractedNoteCommitment = note.commitment().into();
+    let sibling = MerkleHashOrchard::from_cmx(&cmx);
+    let path = MerklePath::from_parts(0, [sibling; 32]);
+    let anchor = path.root(cmx);
+    let mut orchard_builder = Builder::new(
+        BundleType::DEFAULT,
+        BundleVersion::orchard_v2(),
+        BundleVersion::orchard_v2().default_flags(),
+        anchor,
+    )
+    .expect("orchard Builder::new");
+    orchard_builder
+        .add_spend(spend_fvk.clone(), note, path)
+        .expect("add_spend");
+    let (orchard_bundle, _) = orchard_builder
+        .build_for_pczt(&mut *rng)
+        .expect("orchard build_for_pczt");
+
+    // --- Ironwood side: a single output, no spend (anchor unused w/o spends). ---
+    let mut iw_builder = Builder::new(
+        BundleType::DEFAULT,
+        BundleVersion::ironwood_v3(),
+        BundleVersion::ironwood_v3().default_flags(),
+        Anchor::empty_tree(),
+    )
+    .expect("ironwood Builder::new");
+    iw_builder
+        .add_output(out_ovk, out_addr, NoteValue::from_raw(out_value), [0u8; 512])
+        .expect("add_output");
+    let (iw_bundle, _) = iw_builder
+        .build_for_pczt(&mut *rng)
+        .expect("ironwood build_for_pczt");
+
+    let parts = PcztParts {
+        params: Network::TestNetwork,
+        version: TxVersion::V6,
+        consensus_branch_id: BranchId::Nu6_3,
+        lock_time: 0,
+        expiry_height: BlockHeight::from_u32(0),
+        transparent: None,
+        sapling: None,
+        orchard: Some(orchard_bundle),
+        ironwood: Some(iw_bundle),
+    };
+    Creator::build_from_parts(parts).expect("build_from_parts (turnstile v6)")
 }
 
 /// Hardened-derivation flag for raw BIP-32 path components.
@@ -213,6 +349,7 @@ fn make_transparent_pczt(
         transparent: Some(bundle),
         sapling: None,
         orchard: None,
+        ironwood: None,
     };
     Creator::build_from_parts(parts).expect("build_from_parts (transparent-only)")
 }
@@ -292,13 +429,15 @@ fn make_sapling_pczt(
         transparent: None,
         sapling: Some(bundle),
         orchard: None,
+        ironwood: None,
     };
     Creator::build_from_parts(parts).expect("build_from_parts (sapling-only)")
 }
 
 fn write_fixture(name: &str, pczt: &pczt::Pczt) {
     let path = format!("{}/tests/fixtures/{}.pczt", env!("CARGO_MANIFEST_DIR"), name);
-    std::fs::write(&path, pczt.serialize()).unwrap_or_else(|e| panic!("write {path}: {e}"));
+    let bytes = pczt.clone().serialize().expect("serialize pczt");
+    std::fs::write(&path, bytes).unwrap_or_else(|e| panic!("write {path}: {e}"));
     eprintln!("wrote {path}");
 }
 
@@ -400,4 +539,50 @@ fn generate_fixtures() {
         ],
     );
     write_fixture("sapling_change", &sapling);
+
+    // --- Ironwood fixtures (NU6.3). Generated LAST so the RNG sequence for every
+    // fixture above is unchanged (the shared `rng` is consumed in order; inserting
+    // these earlier would reshuffle later bundles' action layout — e.g. move
+    // `unprovable_output`'s real output off action index 0). ---
+
+    // honest_ironwood: the Ironwood-pool analogue of honest_bridge_deposit — spend
+    // 100_000 of our Ironwood note, pay the bridge 90_000, 10_000 ZIP-317 fee.
+    // Exercises the `.with_ironwood()` describe/validate arm and `sign_ironwood`;
+    // `describe` surfaces the bridge as an ironwood-pool payment (verified) and
+    // recognises a migration to a FOREIGN address (`to_self = false`).
+    let honest_iw = make_ironwood_pczt(
+        &mut rng,
+        &our,
+        100_000,
+        &[(Some(our_ext_ovk.clone()), bridge_addr, 90_000)],
+    );
+    write_fixture("honest_ironwood", &honest_iw);
+
+    // self_migrate_ironwood: the realistic Path-A shape — the whole balance moves
+    // into a single Ironwood output paying OUR OWN address (a self-migration),
+    // 10_000 fee. `describe` must recognise a clean Path-A migration with
+    // `to_self = true` and `is_clean_path_a = true`.
+    let our_ext_addr = our.address_at(0u32, Scope::External);
+    let self_migrate = make_ironwood_pczt(
+        &mut rng,
+        &our,
+        100_000,
+        &[(Some(our_ext_ovk.clone()), our_ext_addr, 90_000)],
+    );
+    write_fixture("self_migrate_ironwood", &self_migrate);
+
+    // turnstile_migration: the REAL Path-A shape — an Orchard bundle spending
+    // 100_000 of our Orchard note (leaving Orchard) + an Ironwood bundle with one
+    // 90_000 output to our OWN address (entering Ironwood), netting a 10_000 fee.
+    // `describe` must count the Orchard spend as input, the Ironwood output as
+    // output, and recognise a clean self-migration; `validate` must accept it.
+    let turnstile = make_turnstile_migration_pczt(
+        &mut rng,
+        &our,
+        100_000,
+        Some(our_ext_ovk.clone()),
+        our_ext_addr,
+        90_000,
+    );
+    write_fixture("turnstile_migration", &turnstile);
 }

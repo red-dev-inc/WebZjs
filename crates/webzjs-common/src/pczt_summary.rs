@@ -15,6 +15,9 @@ pub mod pool {
     pub const ORCHARD: &str = "orchard";
     pub const SAPLING: &str = "sapling";
     pub const TRANSPARENT: &str = "transparent";
+    /// NU6.3 Ironwood pool. Reuses the Orchard action/key/receiver shape, so its
+    /// outputs are described exactly like Orchard's but tagged with this pool.
+    pub const IRONWOOD: &str = "ironwood";
 }
 
 /// A single output recovered from a PCZT, with its trust status.
@@ -29,13 +32,37 @@ pub struct PcztOutputSummary {
     pub value: u64,
     /// UTF-8 memo if present and decodable.
     pub memo: Option<String>,
-    /// `true` if this output is change / a self-send recognised via the IVK.
+    /// `true` if this output is change / a self-send recognised via the IVK
+    /// (internal scope specifically).
     pub is_change: bool,
+    /// `true` if this output pays one of *our own* addresses in any scope
+    /// (internal change OR an external self-send). Superset of [`Self::is_change`].
+    /// Used by NU6.3 migration recognition to tell a self-migration from a
+    /// migration that would send funds to someone else.
+    pub is_ours: bool,
     /// `true` if the displayed `(recipient, value)` is cryptographically bound
     /// to the note commitment that will be signed (Layer A.3), or is a
     /// transparent output read directly. `false` means "shown but not provable"
     /// — the Snap MUST refuse to sign such a PCZT.
     pub verified: bool,
+}
+
+/// NU6.3 Path-A migration recognition (ZIP 318 "Migrate Immediately"). Present on
+/// [`PcztSummary`] when a PCZT moves value into the Ironwood pool, so the Snap can
+/// render a migration-specific consent dialog (with the ZIP-315 public-amount
+/// warning) instead of the generic send view. All values in zatoshis.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MigrationSummary {
+    /// Total value moving into the Ironwood pool (the migrated amount).
+    pub amount: u64,
+    /// `true` iff every Ironwood output pays one of our own addresses
+    /// (self-migration). `false` is a hard red flag: the "migration" would send
+    /// funds to someone else — the dialog MUST warn loudly.
+    pub to_self: bool,
+    /// `true` iff this is a clean Path-A shape: exactly one Ironwood output and no
+    /// payments to other parties (any non-Ironwood output is change back to us).
+    /// The whole Orchard balance moving into a single Ironwood note.
+    pub is_clean_path_a: bool,
 }
 
 /// Human-verifiable summary of what a PCZT does. All values in zatoshis.
@@ -51,4 +78,8 @@ pub struct PcztSummary {
     pub total_out: u64,
     /// Fee = `total_in - total_out`.
     pub fee: u64,
+    /// Present iff this PCZT moves value into the Ironwood pool (a NU6.3 Path-A
+    /// migration). Drives the migration-specific consent dialog. `None` for
+    /// ordinary transactions.
+    pub migration: Option<MigrationSummary>,
 }

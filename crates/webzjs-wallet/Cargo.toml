@@ -64,7 +64,7 @@ zcash_proofs = { workspace = true, default-features = false, features = ["bundle
 zip321 = { workspace = true }
 zip32 = { workspace = true }
 pczt = { workspace = true, default-features = false, features = ["orchard", "sapling", "transparent"] }
-orchard = { version = "0.14", default-features = false }
+orchard = { version = "0.15", default-features = false }
 sapling = { workspace = true }
 bip32.workspace = true
 ## gRPC Web dependencies

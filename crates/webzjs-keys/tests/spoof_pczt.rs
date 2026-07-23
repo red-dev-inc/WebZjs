@@ -145,6 +145,148 @@ fn unprovable_output_is_refused() {
     );
 }
 
+/// The bridge's Orchard address, encoded as `pczt_describe_inner` encodes a
+/// recovered Orchard/Ironwood recipient (a UA with only an Orchard receiver —
+/// Ironwood reuses the Orchard UA receiver).
+fn bridge_orchard_addr() -> String {
+    let network = Network::from_str("test").expect("valid network");
+    let ofvk = ufvk_for_seed(BRIDGE_SEED)
+        .orchard()
+        .expect("UFVK has an Orchard key")
+        .clone();
+    let addr = ofvk.address_at(0u32, orchard::keys::Scope::External);
+    UnifiedAddress::from_receivers(Some(addr), None, None)
+        .expect("orchard-only UA")
+        .encode(&network)
+}
+
+/// NU6.3 Ironwood: an honest Ironwood-pool payment under our key must be
+/// described as an `ironwood`-pool output (commitment-bound), surface the true
+/// recipient, and validate. This exercises the `.with_ironwood()` describe arm —
+/// the Ironwood analogue of `honest_pczt_is_accepted` — proving Ironwood is
+/// walked by the same trusted-display path as Orchard.
+#[test]
+fn ironwood_payment_is_described_and_accepted() {
+    let ufvk = our_ufvk();
+    let pczt = load_pczt("honest_ironwood");
+
+    let summary = pczt_describe_inner(Network::from_str("test").unwrap(), pczt.clone(), &ufvk)
+        .expect("describe must succeed on an Ironwood PCZT");
+
+    let ironwood_outs: Vec<_> = summary.outputs.iter().filter(|o| o.pool == "ironwood").collect();
+    assert_eq!(
+        ironwood_outs.len(),
+        1,
+        "expected exactly one ironwood-pool output"
+    );
+    assert!(
+        ironwood_outs
+            .iter()
+            .any(|o| o.recipient.as_deref() == Some(bridge_orchard_addr().as_str())),
+        "describe must surface the true Ironwood recipient"
+    );
+    assert!(
+        ironwood_outs.iter().all(|o| o.verified),
+        "the Ironwood output must be commitment-bound (verified)"
+    );
+
+    // Path-A migration recognition: this PCZT moves value into Ironwood, so it
+    // must be flagged as a migration for the migrated amount. This fixture pays the
+    // bridge (a FOREIGN address), so `to_self` must be false — the red-flag path the
+    // consent dialog warns loudly about.
+    let migration = summary
+        .migration
+        .as_ref()
+        .expect("a PCZT with an Ironwood output must be recognised as a migration");
+    assert_eq!(
+        migration.amount, 90_000,
+        "the migration amount must equal the Ironwood output value"
+    );
+    assert!(
+        !migration.to_self,
+        "migrating to the bridge (a foreign address) must NOT be flagged as self-migration"
+    );
+
+    assert!(
+        pczt_validate_inner(Network::from_str("test").unwrap(), pczt, &ufvk).is_ok(),
+        "a balanced Ironwood spend under our key must validate"
+    );
+}
+
+/// NU6.3 Path-A self-migration: the whole balance moves into a single Ironwood
+/// output paying our OWN address. `describe` must recognise a clean Path-A
+/// migration (`to_self = true`, `is_clean_path_a = true`) for the migrated amount,
+/// and the balanced transaction must validate.
+#[test]
+fn self_migration_is_recognized() {
+    let ufvk = our_ufvk();
+    let pczt = load_pczt("self_migrate_ironwood");
+
+    let summary = pczt_describe_inner(Network::from_str("test").unwrap(), pczt.clone(), &ufvk)
+        .expect("describe must succeed on a self-migration PCZT");
+
+    let migration = summary
+        .migration
+        .as_ref()
+        .expect("an Ironwood-output PCZT must be recognised as a migration");
+    assert_eq!(migration.amount, 90_000, "migrated amount = Ironwood output value");
+    assert!(
+        migration.to_self,
+        "migrating to our own address must be flagged as a self-migration"
+    );
+    assert!(
+        migration.is_clean_path_a,
+        "one Ironwood output, no third-party outputs = a clean Path-A migration"
+    );
+    assert!(
+        pczt_validate_inner(Network::from_str("test").unwrap(), pczt, &ufvk).is_ok(),
+        "a balanced self-migration under our key must validate"
+    );
+}
+
+/// NU6.3 Path-A **turnstile** migration — the real cross-pool shape: an Orchard
+/// bundle spending our note (value leaving Orchard) + an Ironwood bundle with one
+/// output paying our own address (value entering Ironwood), netting a fee. This is
+/// the closest faithful test to what the Snap sees for a live migration. `describe`
+/// must count the Orchard spend as input and the Ironwood output as output, produce
+/// the correct fee, recognise a clean self-migration, and `validate` must accept.
+#[test]
+fn turnstile_migration_end_to_end() {
+    let ufvk = our_ufvk();
+    let pczt = load_pczt("turnstile_migration");
+
+    let summary = pczt_describe_inner(Network::from_str("test").unwrap(), pczt.clone(), &ufvk)
+        .expect("describe must succeed on a turnstile migration PCZT");
+
+    // Value crosses the turnstile: 100_000 spent from Orchard, 90_000 into Ironwood,
+    // 10_000 fee. This IS the turnstile value identity the validator checks.
+    assert_eq!(summary.total_in, 100_000, "the Orchard spend is our input");
+    assert_eq!(summary.total_out, 90_000, "the Ironwood output is the migrated value");
+    assert_eq!(summary.fee, 10_000, "fee = Orchard out − Ironwood in");
+
+    // Exactly one displayed output: the Ironwood note, to us, commitment-bound.
+    assert_eq!(summary.outputs.len(), 1, "only the Ironwood output is displayed");
+    let out = &summary.outputs[0];
+    assert_eq!(out.pool, "ironwood");
+    assert!(out.is_ours, "the migration output pays our own address");
+    assert!(out.verified, "the Ironwood output must be commitment-bound");
+
+    // Recognised as a clean Path-A self-migration.
+    let m = summary
+        .migration
+        .as_ref()
+        .expect("a cross-pool Orchard→Ironwood tx must be recognised as a migration");
+    assert_eq!(m.amount, 90_000);
+    assert!(m.to_self, "migrating to our own address is a self-migration");
+    assert!(m.is_clean_path_a, "one Ironwood output, no third-party outputs");
+
+    // Layer B accepts the turnstile: spends ours, balances, verified, fee in band.
+    assert!(
+        pczt_validate_inner(Network::from_str("test").unwrap(), pczt, &ufvk).is_ok(),
+        "a well-formed turnstile migration under our key must validate"
+    );
+}
+
 /// The bridge's transparent address (external/0), encoded exactly as
 /// `pczt_describe_inner` encodes a recovered transparent recipient.
 fn bridge_taddr() -> String {

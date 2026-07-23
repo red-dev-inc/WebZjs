@@ -86,7 +86,9 @@ fn fvk_plant_does_not_bypass_foreign_input_detection() {
     // `foreign_input.pczt` spends a note under the FOREIGN key; its serialized
     // form carries the foreign 96-byte OFvk in the spend's `fvk` field. Plant
     // OUR OFvk bytes there to simulate the FVK-plant attack.
-    let mut pczt_bytes = load_pczt("foreign_input").serialize();
+    let mut pczt_bytes = load_pczt("foreign_input")
+        .serialize()
+        .expect("serialize foreign_input pczt");
     let planted = replace_first(
         &mut pczt_bytes,
         &foreign_ofvk.to_bytes(),

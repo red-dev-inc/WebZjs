@@ -31,7 +31,19 @@ type PcztOutputSummary = {
   value: number | bigint;
   memo: string | null;
   is_change: boolean;
+  is_ours: boolean;
   verified: boolean;
+};
+
+/**
+ * NU6.3 Path-A migration recognition. Mirrors `MigrationSummary` in
+ * `crates/webzjs-common/src/pczt_summary.rs`. Present when the PCZT moves value
+ * into the Ironwood pool.
+ */
+type MigrationSummary = {
+  amount: number | bigint;
+  to_self: boolean;
+  is_clean_path_a: boolean;
 };
 
 /** Trusted-display summary recovered from a PCZT. Mirrors `PcztSummary`. */
@@ -41,6 +53,7 @@ type PcztSummary = {
   total_in: number | bigint;
   total_out: number | bigint;
   fee: number | bigint;
+  migration: MigrationSummary | null;
 };
 
 /** Parse a ZEC decimal string into zatoshis, without floating-point error. */
@@ -138,11 +151,45 @@ export async function signPczt(
     </Text>,
   ]);
 
+  // NU6.3 Path-A migration: when the PCZT moves value into Ironwood, lead with a
+  // migration-specific consent view carrying the authoritative (Layer A) amount and
+  // the mandatory ZIP-315 public-amount warning. `migration.amount` comes from the
+  // PCZT itself, not the caller. A destination that is not our own wallet is a hard
+  // red flag (funds would leave to a third party under the guise of "migration").
+  const migration = summary.migration;
+  const migrationSection = migration ? (
+    <Box>
+      <Heading>Migrate to Ironwood</Heading>
+      <Text>
+        Moving <Bold>{`${zatsToZec(migration.amount)} ZEC`}</Bold> from your Orchard
+        balance into the Ironwood pool.
+      </Text>
+      <Text>
+        ⚠ <Bold>This amount will be revealed publicly on-chain.</Bold> Crossing the
+        pool boundary exposes the transfer amount; approving is your consent to make
+        it public.
+      </Text>
+      {migration.to_self ? (
+        <Text>✓ Destination is your own wallet (self-migration).</Text>
+      ) : (
+        <Text>
+          ⚠ <Bold>WARNING: this does NOT migrate to your own wallet.</Bold> The
+          Ironwood funds go to another address. Do not approve unless you intend to
+          send them away.
+        </Text>
+      )}
+      <Divider />
+    </Box>
+  ) : (
+    <Text> </Text>
+  );
+
   const content = (
     <Box>
-      <Heading>Sign Zcash transaction</Heading>
+      <Heading>{migration ? 'Migrate Zcash to Ironwood' : 'Sign Zcash transaction'}</Heading>
       <Text>Origin: {origin}</Text>
       <Divider />
+      {migrationSection}
       <Heading>Verified from the PCZT</Heading>
       {verifiedSection}
       <Text>

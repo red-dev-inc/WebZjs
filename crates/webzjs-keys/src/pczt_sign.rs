@@ -48,6 +48,12 @@ pub async fn pczt_sign_inner(
         Orchard {
             index: usize,
         },
+        // NU6.3 Ironwood spends reuse the Orchard spend-authorizing key and ZIP-32
+        // derivation; they are collected and signed exactly like Orchard, only via
+        // the Ironwood bundle / `sign_ironwood`.
+        Ironwood {
+            index: usize,
+        },
         Sapling {
             index: usize,
         },
@@ -76,6 +82,30 @@ pub async fn pczt_sign_inner(
                     keys.entry(account_index)
                         .or_default()
                         .push(KeyRef::Orchard { index });
+                }
+            }
+            Ok(())
+        })
+        .map_err(|e| Error::PcztSign(format!("Invalid PCZT: {:?}", e)))?
+        .with_ironwood::<Infallible, _>(|bundle| {
+            // Ironwood reuses the Orchard action/key shape, so collect spendable
+            // Ironwood actions exactly as for Orchard (same zip32 derivation).
+            for (index, action) in bundle.actions().iter().enumerate() {
+                if let Some(account_index) =
+                    action
+                        .spend()
+                        .zip32_derivation()
+                        .as_ref()
+                        .and_then(|derivation| {
+                            derivation.extract_account_index(
+                                &seed_fp,
+                                zip32::ChildIndex::hardened(network.network_type().coin_type()),
+                            )
+                        })
+                {
+                    keys.entry(account_index)
+                        .or_default()
+                        .push(KeyRef::Ironwood { index });
                 }
             }
             Ok(())
@@ -140,6 +170,20 @@ pub async fn pczt_sign_inner(
                         .map_err(|e| {
                             Error::PcztSign(format!(
                                 "Failed to sign Orchard spend {index}: {:?}",
+                                e
+                            ))
+                        })?;
+                }
+                KeyRef::Ironwood { index } => {
+                    // Ironwood reuses the Orchard spend-authorizing key.
+                    signer
+                        .sign_ironwood(
+                            index,
+                            &orchard::keys::SpendAuthorizingKey::from(usk.orchard()),
+                        )
+                        .map_err(|e| {
+                            Error::PcztSign(format!(
+                                "Failed to sign Ironwood spend {index}: {:?}",
                                 e
                             ))
                         })?;

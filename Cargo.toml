@@ -30,19 +30,21 @@ console_error_panic_hook = { version = "0.1.7" }
 tonic-web-wasm-client = "0.8.0"
 tokio_with_wasm = { version = "0.7.1", features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }
 
-## Zcash dependencies - upstream librustzcash @ 97416db (NU6.2), redirected via [patch.crates-io].
-## zcash_client_memory = redbridge fork carrying ChainSafe's Snap patches.
-zcash_keys = { version = "0.14.0", features = ["transparent-inputs", "orchard", "sapling", "unstable"] }
-zcash_client_backend = { version = "0.23.0", default-features = false, features = ["sync", "lightwalletd-tonic", "orchard"] }
-zcash_client_memory = { git = "https://github.com/red-dev-inc/zcash_client_memory", branch = "feat/snap-nu62", features = ["orchard", "transparent-inputs"] }
-zcash_primitives = { version = "0.28.0" }
-zcash_transparent = { version = "0.8.0", default-features = false }
-zcash_address = { version = "0.12.0" }
-zcash_proofs = { version = "0.28.0", default-features = false, features = ["bundled-prover", "multicore"] }
-zip321 = { version = "0.8.0" }
+## Zcash dependencies - upstream librustzcash @ 0a2c6d1a (NU6.3 main, release-candidate versions;
+## Nu6_3 = 0x37a5_165b, testnet activation 4,134,000, mainnet activation 3,428,143 — both finalized),
+## redirected via [patch.crates-io]. zcash_client_memory = redbridge fork carrying ChainSafe's Snap patches.
+## rc crates (pczt, client_backend, zip321, sqlite) keep the explicit -rc.1 so the pre-release matches.
+zcash_keys = { version = "0.15.0", features = ["transparent-inputs", "orchard", "sapling", "unstable"] }
+zcash_client_backend = { version = "0.24.0-rc.1", default-features = false, features = ["sync", "lightwalletd-tonic", "orchard"] }
+zcash_client_memory = { git = "https://github.com/red-dev-inc/zcash_client_memory", branch = "feat/snap-nu63", features = ["orchard", "transparent-inputs"] }
+zcash_primitives = { version = "0.29.0" }
+zcash_transparent = { version = "0.9.0", default-features = false }
+zcash_address = { version = "0.13.0" }
+zcash_proofs = { version = "0.29.0", default-features = false, features = ["bundled-prover", "multicore"] }
+zip321 = { version = "0.9.0-rc.1" }
 zip32 = { version = "0.2" }
-zcash_protocol = { version = "0.9.0", default-features = false }
-pczt = { version = "0.7.0", default-features = false, features = ["orchard", "sapling", "transparent"] }
+zcash_protocol = { version = "0.10.0", default-features = false }
+pczt = { version = "0.8.0-rc.1", default-features = false, features = ["orchard", "sapling", "transparent"] }
 sapling = { package = "sapling-crypto", version = "0.7", default-features = false }
 bip32 = { version = "=0.6.0-pre.1", default-features = false, features = ["alloc"] }
 ## gRPC Web dependencies
@@ -51,7 +53,7 @@ tonic = { version = "0.14", default-features = false }
 
 
 # Used in Native tests
-zcash_client_sqlite = { version = "0.21.0", default-features = false, features = ["unstable", "orchard"] }
+zcash_client_sqlite = { version = "0.22.0-rc.1", default-features = false, features = ["unstable", "orchard"] }
 
 getrandom = { version = "0.2", features = ["js"] }
 thiserror = "1.0.63"
@@ -82,21 +84,29 @@ tokio = { version = "1.0", features = ["rt", "macros"] }
 byte-unit = { version = "5.1.4", features = ["byte"] }
 
 [patch.crates-io]
-# NU6.2: redirect the librustzcash family to upstream rev 97416db (carries Nu6_2 = 0x5437_f330,
-# mainnet activation 3,364,600 / testnet 4,052,000). This rev MUST match the rev pinned by the
-# red-dev-inc/zcash_client_memory fork, or cargo builds two zcash_primitives -> trait mismatches.
-equihash             = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zcash_address        = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zcash_client_backend = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zcash_client_sqlite  = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zcash_encoding       = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zcash_keys           = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zcash_protocol       = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zip321               = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zcash_primitives     = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zcash_proofs         = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-pczt                 = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
-zcash_transparent    = { git = "https://github.com/zcash/librustzcash", rev = "97416db85512d7aa81d7f48a93f78d097bffd6b8" }
+# NU6.3: redirect the librustzcash family to upstream main rev 0a2c6d1a (release-candidate versions;
+# carries Nu6_3 = 0x37a5_165b, testnet activation 4,134,000, mainnet activation 3,428,143 — both
+# finalized, and the Ironwood wallet layer: Signer::sign_ironwood, Verifier::with_ironwood,
+# IronwoodDomain scanning). This rev MUST match the rev pinned by the red-dev-inc/zcash_client_memory
+# fork, or cargo builds two zcash_primitives -> trait mismatches.
+#
+# orchard: main patches orchard to the ZIP-374 deferred-anchor-builder branch (rev 3bd2b736, still
+# version 0.15.0). We MUST mirror this exact patch, or our crates pull orchard 0.15.0 from crates.io
+# while librustzcash pulls the git rev -> two `orchard` versions -> trait mismatch. Drop once it lands
+# in an orchard release.
+orchard              = { git = "https://github.com/zcash/orchard.git", rev = "3bd2b736d1273226595773265313fc3f3428af16" }
+equihash             = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zcash_address        = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zcash_client_backend = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zcash_client_sqlite  = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zcash_encoding       = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zcash_keys           = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zcash_protocol       = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zip321               = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zcash_primitives     = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zcash_proofs         = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+pczt                 = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+zcash_transparent    = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(wasm_bindgen)', 'cfg(wasm_bindgen_unstable_test_coverage)'] }
