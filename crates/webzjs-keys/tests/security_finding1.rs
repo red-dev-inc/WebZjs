@@ -75,6 +75,10 @@ fn replace_first(haystack: &mut [u8], needle: &[u8], replacement: &[u8]) -> bool
 /// foreign input, and `pczt_describe` does not count its value as ours.
 #[test]
 fn fvk_plant_does_not_bypass_foreign_input_detection() {
+    // Narration is captured by `cargo test`; run with `-- --nocapture` to read it.
+    println!("\n┌─ CASE  fvk_plant_does_not_bypass_foreign_input_detection  (SECURITY, HIGH)");
+    println!("│  what : an attacker takes a FOREIGN spend and pastes OUR key label onto it,");
+    println!("│         trying to trick the Snap into treating a stranger's note as ours");
     let our_ufvk = ufvk_for_seed(OUR_SEED);
     let foreign_ufvk = ufvk_for_seed(FOREIGN_SEED);
 
@@ -99,11 +103,13 @@ fn fvk_plant_does_not_bypass_foreign_input_detection() {
         "foreign FVK bytes not found in the serialized PCZT — the serialization \
          format may have changed; review the byte-search approach"
     );
+    println!("│  attack : planted OUR Orchard FVK bytes over the foreign spend's fvk field");
     let poisoned = pczt::Pczt::parse(&pczt_bytes).expect("parse FVK-planted PCZT");
 
     // Fixed behaviour: the planted foreign spend is rejected as a foreign input.
     let err = pczt_validate_inner(Network::TestNetwork, poisoned.clone(), &our_ufvk)
         .expect_err("FVK-planted foreign input must be rejected");
+    println!("│  validate → REJECTED (attribution is nullifier-only, ignores the fvk label): {err}");
     assert!(
         err.to_string().contains("not under this key"),
         "must be rejected specifically as a foreign input, got: {err}"
@@ -115,6 +121,10 @@ fn fvk_plant_does_not_bypass_foreign_input_detection() {
     // spend's value).
     let summary = pczt_describe_inner(Network::TestNetwork, poisoned, &our_ufvk)
         .expect("describe must not panic on a structurally valid PCZT");
+    println!(
+        "│  describe → total_in = {} zats (the planted foreign value is NOT credited to us)",
+        summary.total_in
+    );
     assert_eq!(
         summary.total_in, 0,
         "the mis-attributed foreign spend must not be counted as our input"
@@ -125,4 +135,5 @@ fn fvk_plant_does_not_bypass_foreign_input_detection() {
         pczt_validate_inner(Network::TestNetwork, load_pczt("foreign_input"), &our_ufvk).is_err(),
         "the unmodified foreign_input fixture must still be rejected"
     );
+    println!("└─ ✓ the FVK-plant attack FAILS — you can't fake ownership by pasting a key label\n");
 }
