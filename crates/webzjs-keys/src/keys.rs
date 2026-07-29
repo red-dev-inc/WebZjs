@@ -190,6 +190,14 @@ impl UnifiedFullViewingKey {
     }
 }
 
+impl UnifiedFullViewingKey {
+    /// Borrow the wrapped key for in-crate PCZT inspection (describe/validate).
+    /// Not exported to JS — the wasm boundary only sees the methods above.
+    pub(crate) fn as_inner(&self) -> &zcash_keys::keys::UnifiedFullViewingKey {
+        &self.inner
+    }
+}
+
 /// Generate a new BIP39 24-word seed phrase
 ///
 /// IMPORTANT: This probably does not use secure randomness when used in the browser

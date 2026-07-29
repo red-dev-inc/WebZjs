@@ -181,10 +181,15 @@ pub fn extract_transaction_history(
         // Add received value
         entry.received_value += note.note().value().into_u64();
 
-        // Determine pool from note type
+        // Determine pool from note type. NU6.3: an Orchard-family note carries a
+        // `ValuePool` distinguishing the Orchard pool from the Ironwood pool (both
+        // reuse the same `orchard::Note` shape).
         let pool = match note.note() {
             zcash_client_backend::wallet::Note::Sapling(_) => "sapling",
-            zcash_client_backend::wallet::Note::Orchard(_) => "orchard",
+            zcash_client_backend::wallet::Note::Orchard { pool, .. } => match pool {
+                orchard::ValuePool::Orchard => "orchard",
+                orchard::ValuePool::Ironwood => "ironwood",
+            },
         };
         entry.pools.insert(pool.to_string());
 
@@ -227,13 +232,21 @@ pub fn extract_transaction_history(
                     zcash_protocol::PoolType::Shielded(
                         zcash_protocol::ShieldedProtocol::Orchard,
                     ) => "orchard",
+                    // NU6.3 Ironwood pool.
+                    zcash_protocol::PoolType::Shielded(
+                        zcash_protocol::ShieldedProtocol::Ironwood,
+                    ) => "ironwood",
                 }
             }
             zcash_client_backend::wallet::Recipient::EphemeralTransparent { .. } => "transparent",
-            zcash_client_backend::wallet::Recipient::InternalAccount { note, .. } => {
+            zcash_client_backend::wallet::Recipient::InternalTransparent { .. } => "transparent",
+            zcash_client_backend::wallet::Recipient::InternalShielded { note, .. } => {
                 match note.as_ref() {
                     zcash_client_backend::wallet::Note::Sapling(_) => "sapling",
-                    zcash_client_backend::wallet::Note::Orchard(_) => "orchard",
+                    zcash_client_backend::wallet::Note::Orchard { pool, .. } => match pool {
+                        orchard::ValuePool::Orchard => "orchard",
+                        orchard::ValuePool::Ironwood => "ironwood",
+                    },
                 }
             }
         };

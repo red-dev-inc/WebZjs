@@ -31,6 +31,8 @@ use zcash_client_backend::data_api::wallet::{
     extract_and_store_transaction_from_pczt, input_selection::GreedyInputSelector,
     propose_shielding, propose_transfer, ConfirmationsPolicy, SpendingKeys,
 };
+use zcash_client_backend::data_api::wallet::input_selection::SpendPolicy;
+use zcash_client_backend::data_api::CoinbaseFilter;
 use zcash_client_backend::data_api::{
     Account, AccountBirthday, AccountPurpose, InputSource, WalletRead, WalletSummary, WalletWrite,
 };
@@ -52,6 +54,7 @@ use zcash_protocol::ShieldedProtocol;
 
 use zcash_client_backend::sync::run;
 
+use zcash_protocol::consensus::BranchId;
 use zcash_protocol::consensus::Parameters;
 use zcash_protocol::value::Zatoshis;
 use zip32;
@@ -133,6 +136,7 @@ where
         + Hash
         + Default
         + Send
+        + Sync
         + ConditionallySelectable
         + Serialize
         + DeserializeOwned
@@ -341,6 +345,12 @@ where
             &change_strategy,
             request,
             self.min_confirmations,
+            // client_backend 0.24 added a spend policy (which pools/transparent
+            // sources may be spent) and an explicit proposed tx version. Default
+            // spend policy preserves prior behaviour; `None` lets the builder pick
+            // the tx version for the target height (v6 post-NU6.3 activation).
+            &SpendPolicy::default(),
+            None,
         )
         .map_err(|_e| Error::Generic("something bad happened when calling propose transfer. Possibly insufficient balance..".to_string()))?;
         tracing::info!("Transfer proposal created");
@@ -375,6 +385,9 @@ where
             &SpendingKeys::from_unified_spending_key(usk.clone()),
             OvkPolicy::Sender,
             &proposal,
+            // client_backend 0.24 added an explicit expiry height; `None` keeps the
+            // builder's default expiry behaviour.
+            None,
         )
         .map_err(|_| Error::FailedToCreateTransaction)?;
         Ok(transactions)
@@ -542,6 +555,7 @@ where
             &from_addrs,
             account_id,
             self.min_confirmations, // librustzcash operates under the assumption of zero or one conf being the same but that could change.
+            CoinbaseFilter::AllTransparentOutputs, // shield all transparent outputs (preserves pre-0.23 behavior, before this filter existed)
         )
         .map_err(|e| {
             tracing::error!("pczt_shield: propose_shielding failed: {:?}", e);
@@ -563,6 +577,10 @@ where
             account_id,
             OvkPolicy::Sender,
             &proposal,
+            // client_backend 0.24: explicit expiry height (None = builder default)
+            // and the Orchard-pool bundle type for the created PCZT.
+            None,
+            orchard::builder::BundleType::DEFAULT,
         )
         .map_err(|e| {
             tracing::error!("pczt_shield: create_pczt_from_proposal failed: {:?}", e);
@@ -637,6 +655,8 @@ where
             &change_strategy,
             request,
             self.min_confirmations,
+            &SpendPolicy::default(),
+            None,
         )
             .map_err(|e| Error::Generic(format!("something bad happened when calling propose transfer. Possibly insufficient balance... {:?}", e)))?;
         tracing::info!("PCZT proposal created");
@@ -653,6 +673,10 @@ where
             account_id,
             OvkPolicy::Sender,
             &proposal,
+            // client_backend 0.24: explicit expiry height (None = builder default)
+            // and the Orchard-pool bundle type for the created PCZT.
+            None,
+            orchard::builder::BundleType::DEFAULT,
         )
         .map_err(|e| {
             tracing::error!("pczt_create: create_pczt_from_proposal failed: {:?}", e);
@@ -712,9 +736,20 @@ where
             pczt
         };
 
+        // orchard 0.15 (NU6.3) requires an explicit circuit version. Derive it from the
+        // PCZT's target consensus branch, mirroring zcash_primitives' transaction builder:
+        // Nu6_3 -> PostNu6_3 (the Ironwood-era circuit that enforces the disableCrossAddress
+        // constraint sealing the Orchard pool); everything current (Nu6_2) -> FixedPostNu6_2.
+        // The same version must build the verifying key when extracting the transaction below.
+        let orchard_circuit_version =
+            match BranchId::try_from(*pczt.global().consensus_branch_id()) {
+                Ok(BranchId::Nu6_3) => orchard::circuit::OrchardCircuitVersion::PostNu6_3,
+                _ => orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2,
+            };
+
         let prover = LocalTxProver::bundled();
         let pczt = Prover::new(pczt)
-            .create_orchard_proof(&orchard::circuit::ProvingKey::build())
+            .create_orchard_proof(&orchard::circuit::ProvingKey::build(orchard_circuit_version))
             .map_err(|e| Error::PcztProve(format!("Failed to create Orchard proof: {:?}", e)))?
             .create_sapling_proofs(&prover, &prover)
             .map_err(|e| Error::PcztProve(format!("Failed to create Sapling proofs: {:?}", e)))?
@@ -763,6 +798,14 @@ where
             ));
         }
 
+        // Build the Orchard verifying key with the circuit version for this PCZT's target
+        // branch (Nu6_3 -> PostNu6_3, else FixedPostNu6_2), matching how the proof was
+        // created. See the proving-key derivation in the pczt_prove path.
+        let orchard_circuit_version =
+            match BranchId::try_from(*pczt.global().consensus_branch_id()) {
+                Ok(BranchId::Nu6_3) => orchard::circuit::OrchardCircuitVersion::PostNu6_3,
+                _ => orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2,
+            };
         let prover = LocalTxProver::bundled();
         let (spend_vk, output_vk) = prover.verifying_keys();
         let mut db = self.db.write().await;
@@ -770,7 +813,7 @@ where
             &mut *db,
             pczt,
             Some((&spend_vk, &output_vk)),
-            Some(&orchard::circuit::VerifyingKey::build()),
+            Some(&orchard::circuit::VerifyingKey::build(orchard_circuit_version)),
         )
         .map_err(|e| {
             Error::PcztSend(format!(

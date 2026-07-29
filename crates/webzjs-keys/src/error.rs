@@ -12,6 +12,10 @@ pub enum Error {
     KeyDecoding(String),
     #[error("Failed to sign Pczt: {0}")]
     PcztSign(String),
+    #[error("Failed to describe Pczt: {0}")]
+    PcztDescribe(String),
+    #[error("Pczt validation failed: {0}")]
+    PcztValidate(String),
     #[error("Error attempting to get seed fingerprint.")]
     SeedFingerprint,
     #[error("Failed to derive transparent address from UFVK")]

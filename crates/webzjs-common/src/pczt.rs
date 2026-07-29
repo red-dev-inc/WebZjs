@@ -1,8 +1,7 @@
-use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Pczt(pczt::Pczt);
 
 impl From<pczt::Pczt> for Pczt {
@@ -17,21 +16,19 @@ impl From<Pczt> for pczt::Pczt {
     }
 }
 
+// NU6.3 (librustzcash @413717da): the version-agnostic `pczt::Pczt` no longer
+// derives serde `Serialize`/`Deserialize` (only the inner versioned wire structs
+// do), and `serialize` now takes `self` by value and returns a `Result`. The old
+// serde-based `to_json`/`from_json` wrappers were unused, so they were dropped;
+// the byte round-trip below is the supported path.
 #[wasm_bindgen]
 impl Pczt {
-    /// Returns a JSON object with the details of the Pczt.
-    pub fn to_json(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self).unwrap()
-    }
-
-    /// Returns a Pczt from a JSON object
-    pub fn from_json(s: JsValue) -> Pczt {
-        serde_wasm_bindgen::from_value(s).unwrap()
-    }
-
-    /// Returns the postcard serialization of the Pczt.
+    /// Returns the postcard serialization of the Pczt (latest PCZT version).
     pub fn serialize(&self) -> Vec<u8> {
-        self.0.serialize()
+        self.0
+            .clone()
+            .serialize()
+            .expect("serializing a PCZT to its latest version should not fail")
     }
 
     /// Deserialize to a Pczt from postcard bytes.
