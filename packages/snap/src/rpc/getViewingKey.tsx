@@ -26,8 +26,8 @@ export async function getViewingKey(
           <Box>
             <Heading>Reveal Viewing Key to the {origin}</Heading>
             <Divider />
-            <Text>Web wallet {origin} needs access to the Viewing Key, approve this dialog to give permission.</Text>
-            <Text>Viewing Key is used to create a new account in the Zcash Web Wallet. Web wallet account is serialized and stored only locally. Viewing Key is not sent, logged or stored in any way.</Text>
+            <Text>Web wallet {origin} needs access to the Viewing Key, approve this dialog to give permission. The Web Wallet account is serialized and stored only locally in your browser.</Text>
+            <Text>Approving gives {origin} your Zcash viewing key, a permanent window into this wallet. It cannot move your money, but whoever holds it can see everything this wallet receives and sends, forever. Do not approve unless you trust this site with this wallet's full financial history.</Text>
             <Divider />
             <Copyable value={viewingKey} />
           </Box>

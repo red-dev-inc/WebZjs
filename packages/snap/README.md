@@ -37,3 +37,17 @@ The snap manifest (`snap.manifest.json`) controls which origins can communicate 
 Two CI workflows (`check-snap-manifest.yml` and `check-snap-allowed-origins.yml`) verify that `snap.manifest.json` on `main` only contains the production origin `["https://webzjs.chainsafe.dev"]`. If localhost is present, the check will fail.
 
 **Do not commit `snap.manifest.json` after running `yarn dev`** — it will contain `http://localhost:3000`. Run `yarn build` or `yarn manifest:prod` first to reset it before committing.
+
+## 🔒 Security & Privacy
+
+### UFVK Exposure
+
+The `getViewingKey` RPC returns the wallet's Unified Full Viewing Key (UFVK) to
+the requesting web-wallet origin, gated by a per-origin MetaMask consent dialog.
+This is used by the view-only web wallet to scan the chain. A UFVK cannot spend
+or move funds, but it is a permanent, read-only window into the wallet. Whoever
+holds it can see the full balance and the complete transaction history, past and
+future. Once shared with an origin (or anything that origin forwards it to), that
+visibility cannot be revoked for this wallet. This is a property of the current
+design, and reducing UFVK exposure (e.g. keeping scanning inside the Snap) is a
+larger architectural change tracked separately.
