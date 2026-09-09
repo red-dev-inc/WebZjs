@@ -1,18 +1,18 @@
 {
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "WebZjs Snap for Zcash wallet",
   "proposedName": "Zcash Shielded Wallet",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ChainSafe/WebZjs.git"
+    "url": "https://github.com/ZcashCommunityGrants/WebZjs.git"
   },
   "source": {
-    "shasum": "XSKryBXxt6z/9rpylfoNKf2PbHKhJmvaqCDMU6XBBuc=",
+    "shasum": "gSAus5uW0G1pAa2/DsOxzuwZnHE2huN0ZPfTlaWuLWg=",
     "location": {
       "npm": {
         "filePath": "dist/bundle.js",
         "iconPath": "images/logo.svg",
-        "packageName": "@chainsafe/webzjs-zcash-snap",
+        "packageName": "@zcashcommunitygrants/webzjs-zcash-snap",
         "registry": "https://registry.npmjs.org/"
       }
     }
@@ -22,7 +22,7 @@
     "endowment:lifecycle-hooks": {},
     "endowment:webassembly": {},
     "endowment:rpc": {
-      "allowedOrigins": ["https://webzjs.chainsafe.dev"]
+      "allowedOrigins": ["https://webzjs.red.dev"]
     },
     "snap_getBip44Entropy": [
       {

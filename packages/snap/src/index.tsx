@@ -79,7 +79,7 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
 };
 
 export const onInstall: OnInstallHandler = async (args) => {
-  if (args.origin === 'https://webzjs.chainsafe.dev') return;
+  if (args.origin === 'https://webzjs.red.dev') return;
 
   await installDialog();
 };
