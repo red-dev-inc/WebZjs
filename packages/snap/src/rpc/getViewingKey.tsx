@@ -1,4 +1,4 @@
-import { UnifiedSpendingKey } from '@chainsafe/webzjs-keys';
+import { UnifiedSpendingKey } from '@zcashcommunitygrants/webzjs-keys';
 import { getSeed } from '../utils/getSeed';
 import { Box, Copyable, Divider, Heading, Text } from '@metamask/snaps-sdk/jsx';
 

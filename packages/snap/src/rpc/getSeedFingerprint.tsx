@@ -1,6 +1,6 @@
 import {
   SeedFingerprint,
-} from '@chainsafe/webzjs-keys';
+} from '@zcashcommunitygrants/webzjs-keys';
 import { getSeed } from '../utils/getSeed';
 
 export async function getSeedFingerprint(): Promise<string> {

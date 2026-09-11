@@ -13,7 +13,7 @@ import {
   pczt_validate,
   pczt_sign,
   Pczt,
-} from '@chainsafe/webzjs-keys';
+} from '@zcashcommunitygrants/webzjs-keys';
 import { getSeed } from '../utils/getSeed';
 import { SignPcztParams } from 'src/types';
 

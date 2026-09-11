@@ -11,9 +11,9 @@
  * verify the recovery mechanisms work correctly.
  */
 import { test, expect } from '@playwright/test';
-import { WebWallet } from '@chainsafe/webzjs-wallet';
-import type * as WebZJSWallet from '@chainsafe/webzjs-wallet';
-import type * as WebZJSKeys from '@chainsafe/webzjs-keys';
+import { WebWallet } from '@zcashcommunitygrants/webzjs-wallet';
+import type * as WebZJSWallet from '@zcashcommunitygrants/webzjs-wallet';
+import type * as WebZJSKeys from '@zcashcommunitygrants/webzjs-keys';
 
 declare global {
   interface Window {

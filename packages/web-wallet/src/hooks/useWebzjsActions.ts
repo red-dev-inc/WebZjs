@@ -5,7 +5,7 @@ import { useMetaMaskContext } from '../context/MetamaskContext';
 import { useMetaMask } from './snaps/useMetaMask';
 import { useInvokeSnap } from './snaps/useInvokeSnap';
 import { useRequestSnap } from './snaps/useRequestSnap';
-import { SeedFingerprint, WebWallet } from '@chainsafe/webzjs-wallet';
+import { SeedFingerprint, WebWallet } from '@zcashcommunitygrants/webzjs-wallet';
 import { MAINNET_LIGHTWALLETD_PROXY } from '../config/constants';
 import { SnapState } from '../types/snap';
 
