@@ -1,10 +1,10 @@
 {
-  "name": "@chainsafe/webzjs-zcash-snap",
-  "version": "0.3.0",
+  "name": "@zcashcommunitygrants/webzjs-zcash-snap",
+  "version": "1.0.1",
   "description": "Zcash Metmamask Snap that utilizes WebZjs.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ChainSafe/WebZjs.git"
+    "url": "https://github.com/ZcashCommunityGrants/WebZjs.git"
   },
   "license": "(MIT-0 OR Apache-2.0)",
   "main": "./dist/bundle.js",
@@ -29,8 +29,8 @@
     "test": "jest"
   },
   "dependencies": {
-    "@chainsafe/webzjs-keys": "0.1.0",
     "@metamask/snaps-sdk": "^6.17.1",
+    "@zcashcommunitygrants/webzjs-keys": "0.1.0",
     "buffer": "^6.0.3",
     "superstruct": "^2.0.2"
   },

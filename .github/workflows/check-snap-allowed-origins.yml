@@ -29,7 +29,7 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-          expected='["https://webzjs.chainsafe.dev"]'
+          expected='["https://webzjs.red.dev"]'
           MANIFEST="packages/snap/snap.manifest.json"
 
           if [ ! -f "$MANIFEST" ]; then

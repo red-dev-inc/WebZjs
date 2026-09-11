@@ -41,24 +41,24 @@ jobs:
           if echo "$ALLOWED_ORIGINS" | grep -q "localhost"; then
             echo "❌ ERROR: localhost found in allowedOrigins. This should not be in production!"
             echo "Please ensure snap.manifest.json only contains production URLs."
-            echo "Expected: [\"https://webzjs.chainsafe.dev\"]"
+            echo "Expected: [\"https://webzjs.red.dev\"]"
             exit 1
           fi
           
           # Check if the production URL is present
-          if ! echo "$ALLOWED_ORIGINS" | grep -q "https://webzjs.chainsafe.dev"; then
-            echo "❌ ERROR: Production URL 'https://webzjs.chainsafe.dev' not found in allowedOrigins!"
+          if ! echo "$ALLOWED_ORIGINS" | grep -q "https://webzjs.red.dev"; then
+            echo "❌ ERROR: Production URL 'https://webzjs.red.dev' not found in allowedOrigins!"
             exit 1
           fi
           
           # Check if there are any unexpected URLs
-          UNEXPECTED_URLS=$(echo "$ALLOWED_ORIGINS" | grep -v "https://webzjs.chainsafe.dev" || true)
+          UNEXPECTED_URLS=$(echo "$ALLOWED_ORIGINS" | grep -v "https://webzjs.red.dev" || true)
           if [ -n "$UNEXPECTED_URLS" ]; then
             echo "❌ ERROR: Unexpected URLs found in allowedOrigins:"
             echo "$UNEXPECTED_URLS"
-            echo "Expected only: https://webzjs.chainsafe.dev"
+            echo "Expected only: https://webzjs.red.dev"
             exit 1
           fi
           
           echo "✅ SUCCESS: snap.manifest.json has correct allowedOrigins configuration"
-          echo "Found: https://webzjs.chainsafe.dev" 
+          echo "Found: https://webzjs.red.dev" 

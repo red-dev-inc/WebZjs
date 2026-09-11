@@ -112,7 +112,7 @@ yarn dev
 
 ### Dev Build
 
-![webzjs.chainsafe.dev](https://webzjs.chainsafe.dev/)
+![webzjs.red.dev](https://webzjs.red.dev/)
 
 ### Testing
 

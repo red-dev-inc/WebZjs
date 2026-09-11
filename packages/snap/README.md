@@ -34,7 +34,7 @@ The snap manifest (`snap.manifest.json`) controls which origins can communicate 
 
 ### CI: Allowed Origins Check
 
-Two CI workflows (`check-snap-manifest.yml` and `check-snap-allowed-origins.yml`) verify that `snap.manifest.json` on `main` only contains the production origin `["https://webzjs.chainsafe.dev"]`. If localhost is present, the check will fail.
+Two CI workflows (`check-snap-manifest.yml` and `check-snap-allowed-origins.yml`) verify that `snap.manifest.json` on `main` only contains the production origin `["https://webzjs.red.dev"]`. If localhost is present, the check will fail.
 
 **Do not commit `snap.manifest.json` after running `yarn dev`** — it will contain `http://localhost:3000`. Run `yarn build` or `yarn manifest:prod` first to reset it before committing.
 

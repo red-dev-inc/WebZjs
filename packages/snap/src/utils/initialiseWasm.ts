@@ -1,6 +1,6 @@
-import type { InitOutput } from '@chainsafe/webzjs-keys';
-import { initSync } from '@chainsafe/webzjs-keys';
-import wasmDataBase64 from '@chainsafe/webzjs-keys/webzjs_keys_bg.wasm';
+import type { InitOutput } from '@zcashcommunitygrants/webzjs-keys';
+import { initSync } from '@zcashcommunitygrants/webzjs-keys';
+import wasmDataBase64 from '@zcashcommunitygrants/webzjs-keys/webzjs_keys_bg.wasm';
 
 export function initialiseWasm(): InitOutput {
   const base64String = wasmDataBase64 as unknown as string;

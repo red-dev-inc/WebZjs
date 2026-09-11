@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
-import type * as WebZJSWallet from "@chainsafe/webzjs-wallet";
-import type * as WebZJSRequests from "@chainsafe/webzjs-requests";
+import type * as WebZJSWallet from "@zcashcommunitygrants/webzjs-wallet";
+import type * as WebZJSRequests from "@zcashcommunitygrants/webzjs-requests";
 
 declare global {
   interface Window {

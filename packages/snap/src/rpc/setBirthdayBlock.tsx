@@ -92,7 +92,7 @@ export async function setBirthdayBlock({
     })) as BirthdayBlockForm;
     customBirthdayBlock = dialogResponse.customBirthdayBlock;
   } catch (error) {
-    console.log('No custom birthday block provided, using latest block');
+    // No custom birthday block provided; fall back to the latest block.
     customBirthdayBlock = null;
   }
 

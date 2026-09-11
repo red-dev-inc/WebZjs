@@ -12,8 +12,8 @@ import initWebzJSWallet, {
   initThreadPool,
   WalletSummary,
   WebWallet,
-} from '@chainsafe/webzjs-wallet';
-import initWebzJSKeys from '@chainsafe/webzjs-keys';
+} from '@zcashcommunitygrants/webzjs-wallet';
+import initWebzJSKeys from '@zcashcommunitygrants/webzjs-keys';
 import { MAINNET_LIGHTWALLETD_PROXY } from '../config/constants';
 import { Snap } from '../types';
 import toast, { Toaster } from 'react-hot-toast';
