@@ -1,4 +1,3 @@
-import ChainsafePNG from './chainsafe.png';
 import FormTransferSvg from './form-transfer.svg';
 import MetaMaskLogoPNG from './metaMask-logo.png';
 import MetaMaskSnapsLogoPNG from './metamask-snaps-logo.png';
@@ -22,7 +21,6 @@ import CircleSvg from './icons/circle.svg';
 import CircleDashedSvg from './icons/circle-dashed.svg';
 
 export {
-  ChainsafePNG,
   MetaMaskLogoPNG,
   MetaMaskSnapsLogoPNG,
   ZcashPNG,

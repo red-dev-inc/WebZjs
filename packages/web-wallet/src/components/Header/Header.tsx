@@ -32,7 +32,7 @@ const Header = (): React.JSX.Element => {
         <nav className="flex">
           <a
             target="_blank"
-            href="https://chainsafe.github.io/WebZjs/"
+            href="https://github.com/ZcashCommunityGrants/WebZjs"
             className="px-6 relative after:content-['|'] after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-[divide-dividerColor] hover:underline"
           >
             ZCash Docs

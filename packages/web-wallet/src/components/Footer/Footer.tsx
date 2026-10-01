@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChainsafePNG } from '../../assets';
+import { ZcashPNG } from '../../assets';
 
 const Footer = (): React.JSX.Element => {
   return (
@@ -8,17 +8,17 @@ const Footer = (): React.JSX.Element => {
         <span className="block mr-1 text-xs">Made and Maintained by</span>
         <a
           className="inline-flex items-center justify-center"
-          href="https://chainsafe.io/"
+          href="https://zcashcommunitygrants.org/"
           target="_blank"
         >
           <div className="inline-block w-6 h-6 mr-1">
             <img
-              src={ChainsafePNG}
+              src={ZcashPNG}
               className="w-5 h-[20px]"
-              alt="Chainsafe logo"
+              alt="Zcash Community Grants logo"
             />
           </div>
-          ChainSafe
+          Zcash Community Grants
         </a>
       </div>
     </footer>
