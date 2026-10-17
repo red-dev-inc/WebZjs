@@ -594,6 +594,34 @@ impl WebWallet {
         )
     }
 
+    /// Returns whether `account_id` has previously sent funds to `address`.
+    ///
+    /// Matching is by the whole encoded address: the typed address is parsed and re-encoded, so
+    /// a Unified Address only counts as known when this exact Unified Address was paid before.
+    /// Matching on individual receivers would let an address that shares one receiver with a
+    /// known recipient, but pays a different one, pass as known.
+    ///
+    /// Fails if `address` is not a valid Zcash address for the wallet's network.
+    pub async fn has_sent_to(&self, account_id: u32, address: &str) -> Result<bool, Error> {
+        let network = &self.inner.network;
+        let parsed = ZcashAddress::try_from_encoded(address)?;
+        // Only the network check is needed from the conversion.
+        zcash_keys::address::Address::try_from_zcash_address(network, parsed.clone())
+            .map_err(|e| Error::Generic(format!("Address is not valid for this network: {e}")))?;
+        let target = parsed.encode();
+        let account = AccountId::from(account_id);
+
+        let db = self.inner.db.read().await;
+        Ok(db.sent_notes().iter().any(|(_, sent_note)| {
+            sent_note.from_account_id() == account
+                && matches!(
+                    sent_note.to(),
+                    zcash_client_backend::wallet::Recipient::External { recipient_address, .. }
+                        if recipient_address.encode() == target
+                )
+        }))
+    }
+
     ///////////////////////////////////////////////////////////////////////////////////////
     // lightwalletd gRPC methods
     ///////////////////////////////////////////////////////////////////////////////////////

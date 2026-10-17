@@ -1,6 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { PcztTransferStatus, usePczt } from '../../hooks/usePCZT';
 import { useWebZjsContext } from '../../context/WebzjsContext';
+
+/** Route state accepted by the Transfer Balance page, e.g. from "Send again" in the history. */
+export interface TransferBalanceRouteState {
+  recipient?: string;
+}
 
 export interface TransferBalanceFormData {
   amount: string;
@@ -20,6 +26,8 @@ export type TransferBalanceFormHandleChange = (
 export interface TransferBalanceFormType {
   currentStep: number;
   formData: TransferBalanceFormData;
+  /** The recipient the page was opened with, if it came from a previous transaction */
+  prefilledRecipient: string;
   pcztTransferStatus: PcztTransferStatus;
   lastError: string | null;
   nextStep: () => void;
@@ -37,11 +45,23 @@ export enum TransferStep {
 const useTransferBalanceForm = (): TransferBalanceFormType => {
   const { state } = useWebZjsContext();
   const { handlePcztTransaction, pcztTransferStatus, lastError } = usePczt();
+  const location = useLocation();
+  const prefilledRecipient =
+    (location.state as TransferBalanceRouteState | null)?.recipient ?? '';
   const [currentStep, setCurrentStep] = useState<TransferStep>(0);
   const [formData, setFormData] = useState<TransferBalanceFormData>({
     amount: '',
-    recipient: '',
+    recipient: prefilledRecipient,
   });
+
+  // A later "Send again" while this page is already mounted replaces the recipient
+  // and starts the form over.
+  useEffect(() => {
+    if (prefilledRecipient) {
+      setFormData({ amount: '', recipient: prefilledRecipient });
+      setCurrentStep(TransferStep.INPUT);
+    }
+  }, [prefilledRecipient, location.key]);
 
   const nextStep = () => setCurrentStep((prev) => prev + 1);
 
@@ -71,6 +91,7 @@ const useTransferBalanceForm = (): TransferBalanceFormType => {
   return {
     currentStep,
     formData,
+    prefilledRecipient,
     pcztTransferStatus,
     lastError,
     nextStep,

@@ -61,6 +61,8 @@ pub struct TransactionHistoryEntry {
     timestamp: Option<u64>,
     /// Pool type: "sapling", "orchard", "transparent", or "mixed"
     pool: String,
+    /// Encoded addresses of the external recipients (empty unless funds left the wallet)
+    recipients: Vec<String>,
 }
 
 #[wasm_bindgen]
@@ -114,6 +116,11 @@ impl TransactionHistoryEntry {
     pub fn pool(&self) -> String {
         self.pool.clone()
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn recipients(&self) -> Vec<String> {
+        self.recipients.clone()
+    }
 }
 
 /// Response containing paginated transaction history
@@ -151,6 +158,7 @@ struct TxAccumulator {
     fee: Option<u64>,
     memos: Vec<String>,
     pools: std::collections::HashSet<String>,
+    recipients: Vec<String>,
     block_height: Option<BlockHeight>,
     status: Option<TransactionStatus>,
     expiry_height: Option<BlockHeight>,
@@ -223,7 +231,14 @@ pub fn extract_transaction_history(
 
         // Determine pool from recipient
         let pool = match sent_note.to() {
-            zcash_client_backend::wallet::Recipient::External { output_pool, .. } => {
+            zcash_client_backend::wallet::Recipient::External {
+                recipient_address,
+                output_pool,
+            } => {
+                let encoded = recipient_address.encode();
+                if !entry.recipients.contains(&encoded) {
+                    entry.recipients.push(encoded);
+                }
                 match output_pool {
                     zcash_protocol::PoolType::Transparent => "transparent",
                     zcash_protocol::PoolType::Shielded(
@@ -353,6 +368,7 @@ pub fn extract_transaction_history(
                 memo,
                 timestamp,
                 pool,
+                recipients: acc.recipients,
             }
         })
         .collect();

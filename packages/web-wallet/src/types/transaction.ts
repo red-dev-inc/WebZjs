@@ -12,6 +12,8 @@ export interface TransactionHistoryEntry {
   memo: string | null;
   timestamp: number | null;
   pool: string;
+  /** Encoded addresses of the external recipients; empty unless funds left the wallet */
+  recipients: string[];
 }
 
 export interface TransactionHistoryResponse {
