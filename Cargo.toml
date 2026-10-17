@@ -108,5 +108,12 @@ zcash_proofs         = { git = "https://github.com/zcash/librustzcash", rev = "0
 pczt                 = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
 zcash_transparent    = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
 
+# tonic-web-wasm-client 0.8/0.9 fail every server-streaming call that the server ends with a
+# Trailers-Only response (grpc-status in the HTTP headers, empty body). That is what lightwalletd
+# behind Envoy returns for GetAddressUtxosStream when an account has no transparent UTXOs, so every
+# new wallet failed to sync with "malformed response". This is v0.8.0 plus the upstream fix
+# https://github.com/devashishdxt/tonic-web-wasm-client/pull/113; drop once it ships in a release.
+tonic-web-wasm-client = { git = "https://github.com/sqhell/tonic-web-wasm-client", rev = "84bbd81cd1645c6c3527972a9c55d55cce106c1a" }
+
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(wasm_bindgen)', 'cfg(wasm_bindgen_unstable_test_coverage)'] }
