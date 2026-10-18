@@ -154,8 +154,8 @@ pub async fn pczt_sign_inner(
             })
             .map_err(|e| Error::PcztSign(format!("Invalid PCZT: {e:?}")))?
             .finish();
-    let mut signer = Signer::new(pczt).unwrap();
-    //.map_err(|e| anyhow!("Failed to initialize Signer: {:?}", e))?;
+    let mut signer =
+        Signer::new(pczt).map_err(|e| Error::PcztSign(format!("Invalid PCZT: {e:?}")))?;
     for (_, spends) in keys {
         // let usk = UnifiedSpendingKey::from_seed(&params, seed, account_index)?;
         for keyref in spends {
@@ -200,7 +200,7 @@ pub async fn pczt_sign_inner(
                                 .derive_secret_key(scope, address_index)
                                 .map_err(|e| {
                                     Error::PcztSign(format!(
-                                        "Failed to derive transparent key at .../{scope:?}/{address_index:?}: {e:?}"
+                                        "Failed to derive transparent key at .../{scope:?}/{address_index:?}: {e:?}",
                                     ))
                                 })?,
                         )

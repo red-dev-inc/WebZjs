@@ -1,5 +1,7 @@
 use wasm_bindgen::prelude::*;
 
+use crate::error::Error;
+
 #[wasm_bindgen]
 #[derive(Clone, Debug)]
 pub struct Pczt(pczt::Pczt);
@@ -24,15 +26,20 @@ impl From<Pczt> for pczt::Pczt {
 #[wasm_bindgen]
 impl Pczt {
     /// Returns the postcard serialization of the Pczt (latest PCZT version).
-    pub fn serialize(&self) -> Vec<u8> {
+    ///
+    /// Errors are returned to JS as exceptions. A panic here would become a WASM
+    /// trap ("RuntimeError: unreachable") that carries no detail.
+    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
         self.0
             .clone()
             .serialize()
-            .expect("serializing a PCZT to its latest version should not fail")
+            .map_err(|e| Error::PcztSerialize(format!("{e:?}")))
     }
 
     /// Deserialize to a Pczt from postcard bytes.
-    pub fn from_bytes(bytes: &[u8]) -> Pczt {
-        Self(pczt::Pczt::parse(bytes).unwrap())
+    pub fn from_bytes(bytes: &[u8]) -> Result<Pczt, Error> {
+        pczt::Pczt::parse(bytes)
+            .map(Self)
+            .map_err(|e| Error::PcztParse(format!("{e:?}")))
     }
 }
