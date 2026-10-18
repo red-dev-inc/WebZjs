@@ -50,6 +50,10 @@ function shortAddress(address: string): string {
   return address.length > 24 ? `${address.slice(0, 12)}…${address.slice(-8)}` : address;
 }
 
+/** Shown under the list: the wallet only knows transactions since its sync start block. */
+export const OLDER_HISTORY_HINT =
+  'Only transactions since the sync start block are shown. To see older ones, run Full Resync from an earlier block on the';
+
 /** The repeat action for a row: send to the same recipient again, or shield again. */
 function RepeatLink({ transaction }: TransactionRowProps) {
   const linkClass =
@@ -203,6 +207,19 @@ function TransactionHistory() {
             Load More
           </button>
         </div>
+      )}
+
+      {!loading && (
+        <p className="mt-6 text-center text-sm text-gray-500">
+          {OLDER_HISTORY_HINT}{' '}
+          <Link
+            to="/dashboard/account-summary"
+            className="font-medium text-orange-600 hover:text-orange-700 underline"
+          >
+            Account Summary
+          </Link>{' '}
+          tab.
+        </p>
       )}
     </div>
   );
