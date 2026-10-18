@@ -11,8 +11,11 @@
  * - `wallet.meta`    WalletMeta of the stored record, cheap to read on its own
  * - `wallet.backup`  bytes that failed to load, kept until the user decides
  * - `birthdayBlock`  mirror of the stored birthday, kept for the snap-state fallback
+ * - `wallet.staging` StagedWalletRecord: the checkpoint of a full resync in progress. It never
+ *                    replaces `wallet` on its own; `promoteStaging` moves it there atomically
+ * - `wallet.backup.previous` the `wallet` value a promotion replaced (one is kept)
  */
-import { createStore, get, promisifyRequest, set, type UseStore } from 'idb-keyval';
+import { createStore, del, get, promisifyRequest, set, type UseStore } from 'idb-keyval';
 
 import { readBlobBirthday } from './walletBlobMeta';
 
@@ -33,6 +36,24 @@ export interface WalletRecord {
   v: 2;
   bytes: Uint8Array;
   meta: WalletMeta;
+}
+
+/** Metadata of a resync checkpoint; `epoch` is provisional until the checkpoint is promoted. */
+export interface StagedWalletMeta extends WalletMeta {
+  /** Chain tip the resync was heading for when the checkpoint was taken. */
+  chainTip: number | null;
+}
+
+export interface StagedWalletRecord {
+  v: 2;
+  bytes: Uint8Array;
+  meta: StagedWalletMeta;
+}
+
+export interface StageOptions {
+  birthday: number | null;
+  fullyScanned: number | null;
+  chainTip: number | null;
 }
 
 export interface WalletBackup {
@@ -79,6 +100,8 @@ export const WALLET_KEY = 'wallet';
 export const META_KEY = 'wallet.meta';
 export const BACKUP_KEY = 'wallet.backup';
 export const BIRTHDAY_KEY = 'birthdayBlock';
+export const STAGING_KEY = 'wallet.staging';
+export const PREVIOUS_BACKUP_KEY = 'wallet.backup.previous';
 const CHANNEL_NAME = 'webzjs-wallet';
 const WRITER_LOCK = 'webzjs-wallet-writer';
 export const SUPERSEDED = -1;
@@ -125,6 +148,10 @@ function isRecord(value: unknown): value is WalletRecord {
   );
 }
 
+function isStagedRecord(value: unknown): value is StagedWalletRecord {
+  return isRecord(value) && 'chainTip' in value.meta;
+}
+
 /** The epoch a stored value represents: nothing → null, legacy bytes → 0, record → its epoch. */
 function epochOf(stored: unknown): number | null {
   if (stored === undefined || stored === null) return null;
@@ -145,6 +172,14 @@ function serialize<T>(job: () => Promise<T>): Promise<T> {
   const result = writes.then(job);
   writes = result.catch(() => undefined);
   return result;
+}
+
+/** Resolves once every save or promotion queued so far has finished, whether or not it succeeded. */
+export function writesSettled(): Promise<void> {
+  return writes.then(
+    () => undefined,
+    () => undefined,
+  );
 }
 
 /**
@@ -263,6 +298,126 @@ export async function peekStoredEpoch(): Promise<number | null> {
 
 export async function readWalletBackup(): Promise<WalletBackup | null> {
   return ((await get(BACKUP_KEY, store)) as WalletBackup | undefined) ?? null;
+}
+
+/**
+ * Writes a checkpoint of a resync in progress under `wallet.staging`. The checkpoint never
+ * replaces the stored wallet by itself, so there is no epoch check; its epoch is the value
+ * the wallet would get if it were promoted right now. Staging again overwrites the previous
+ * checkpoint.
+ */
+export function stageWallet(wallet: object, bytes: Uint8Array, opts: StageOptions): Promise<StagedWalletMeta> {
+  return serialize(async () => {
+    const origin = origins.get(wallet);
+    const birthday = readBlobBirthday(bytes) ?? opts.birthday ?? origin?.birthday ?? null;
+    return store(
+      'readwrite',
+      (objectStore) =>
+        new Promise<StagedWalletMeta>((resolve, reject) => {
+          const request = objectStore.get(WALLET_KEY);
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const meta: StagedWalletMeta = {
+              epoch: (epochOf(request.result) ?? 0) + 1,
+              birthday,
+              fullyScanned: opts.fullyScanned,
+              chainTip: opts.chainTip,
+              savedAt: Date.now(),
+              writerId: TAB_ID,
+              reason: 'resync',
+            };
+            const record: StagedWalletRecord = { v: 2, bytes, meta };
+            objectStore.put(record, STAGING_KEY);
+            resolve(promisifyRequest(objectStore.transaction).then(() => meta));
+          };
+        }),
+    );
+  });
+}
+
+/** The checkpoint of a resync in progress, or null when there is none. */
+export async function readStaging(): Promise<StagedWalletRecord | null> {
+  const staged = await get(STAGING_KEY, store);
+  return isStagedRecord(staged) ? staged : null;
+}
+
+/** Drops the checkpoint. The stored wallet is not touched. */
+export function clearStaging(): Promise<void> {
+  return serialize(() => del(STAGING_KEY, store));
+}
+
+/** True while the checkpoint has not reached the chain tip it was heading for. */
+export function stagingIsResumable(meta: StagedWalletMeta): boolean {
+  if (meta.chainTip === null) return true;
+  return (meta.fullyScanned ?? 0) < meta.chainTip - 2;
+}
+
+/**
+ * Makes the checkpoint the stored wallet, in one transaction: the previous `wallet` value is
+ * kept under `wallet.backup.previous`, the checkpoint becomes `wallet` at the next epoch, the
+ * metadata and birthday mirror follow, and the checkpoint is deleted. Nothing is changed if
+ * any part fails, or if there is no checkpoint (the returned promise rejects). On success the
+ * instance is registered at the new epoch and other tabs are told.
+ */
+export function promoteStaging(wallet: object): Promise<WalletMeta> {
+  return serialize(async () => {
+    const meta = await store(
+      'readwrite',
+      (objectStore) =>
+        new Promise<WalletMeta>((resolve, reject) => {
+          const transaction = objectStore.transaction;
+          const fail = (error: unknown) => {
+            try {
+              transaction.abort();
+            } catch {
+              // Already aborted or finished.
+            }
+            reject(error);
+          };
+          const stagedRequest = objectStore.get(STAGING_KEY);
+          stagedRequest.onerror = () => fail(stagedRequest.error);
+          stagedRequest.onsuccess = () => {
+            const staged = stagedRequest.result;
+            if (!isStagedRecord(staged)) {
+              fail(new Error('There is no checkpointed resync to promote'));
+              return;
+            }
+            const currentRequest = objectStore.get(WALLET_KEY);
+            currentRequest.onerror = () => fail(currentRequest.error);
+            currentRequest.onsuccess = () => {
+              try {
+                const current = currentRequest.result;
+                const next: WalletMeta = {
+                  epoch: (epochOf(current) ?? 0) + 1,
+                  birthday: staged.meta.birthday,
+                  fullyScanned: staged.meta.fullyScanned,
+                  savedAt: Date.now(),
+                  writerId: TAB_ID,
+                  reason: 'resync',
+                };
+                if (current !== undefined && current !== null) {
+                  objectStore.put(current, PREVIOUS_BACKUP_KEY);
+                }
+                const record: WalletRecord = { v: 2, bytes: staged.bytes, meta: next };
+                objectStore.put(record, WALLET_KEY);
+                objectStore.put(next, META_KEY);
+                if (next.birthday !== null) {
+                  objectStore.put(String(next.birthday), BIRTHDAY_KEY);
+                }
+                objectStore.delete(STAGING_KEY);
+                resolve(promisifyRequest(transaction).then(() => next));
+              } catch (error) {
+                fail(error);
+              }
+            };
+          };
+        }),
+    );
+
+    origins.set(wallet, { epoch: meta.epoch, birthday: meta.birthday });
+    broadcast({ type: 'saved', epoch: meta.epoch, writerId: TAB_ID });
+    return meta;
+  });
 }
 
 export interface WalletChangedMessage {

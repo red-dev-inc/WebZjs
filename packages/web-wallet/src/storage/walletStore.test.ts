@@ -216,3 +216,137 @@ describe('two tabs sharing one storage', () => {
     expect(record.meta.writerId).toBe(tabA.TAB_ID);
   });
 });
+
+describe('resync checkpoints', () => {
+  const stagedMeta = { birthday: 2_600_000, fullyScanned: 2_700_000, chainTip: 3_500_000 };
+
+  it('readStaging returns null when nothing is staged', async () => {
+    const store = await freshStore();
+    expect(await store.readStaging()).toBeNull();
+  });
+
+  it('stages a checkpoint without touching the stored wallet', async () => {
+    const store = await freshStore();
+    const current = {};
+    store.registerWallet(current, { epoch: null, birthday: null });
+    await store.saveWallet(current, bytesOf('v1'), { reason: 'sync' });
+    const fresh = {};
+    store.registerWallet(fresh, { epoch: null, birthday: 2_600_000 });
+
+    const meta = await store.stageWallet(fresh, bytesOf('partial'), stagedMeta);
+
+    expect(meta).toMatchObject({ epoch: 2, reason: 'resync', ...stagedMeta });
+    const staged = (await store.readStaging())!;
+    expect(new TextDecoder().decode(staged.bytes)).toBe('partial');
+    expect(staged.meta).toEqual(meta);
+    expect(store.stagingIsResumable(staged.meta)).toBe(true);
+    expect(await store.peekStoredEpoch()).toBe(1);
+    const record = (await stored('wallet')) as { bytes: Uint8Array };
+    expect(new TextDecoder().decode(record.bytes)).toBe('v1');
+    expect(store.walletOrigin(fresh)).toEqual({ epoch: null, birthday: 2_600_000 });
+  });
+
+  it('a checkpoint at the chain tip is not resumable', async () => {
+    const store = await freshStore();
+    const fresh = {};
+    await store.stageWallet(fresh, bytesOf('done'), { ...stagedMeta, fullyScanned: 3_499_998 });
+    expect(store.stagingIsResumable((await store.readStaging())!.meta)).toBe(false);
+  });
+
+  it('promotes the checkpoint at the next epoch, keeps the previous wallet and clears staging', async () => {
+    const store = await freshStore();
+    const current = {};
+    store.registerWallet(current, { epoch: null, birthday: 2_400_000 });
+    await store.saveWallet(current, bytesOf('v1'), { reason: 'sync' });
+    await store.saveWallet(current, bytesOf('v2'), { reason: 'sync' });
+    const fresh = {};
+    store.registerWallet(fresh, { epoch: null, birthday: 2_600_000 });
+    await store.stageWallet(fresh, bytesOf('resynced'), { ...stagedMeta, fullyScanned: 3_500_000 });
+
+    const meta = await store.promoteStaging(fresh);
+
+    expect(meta).toMatchObject({ epoch: 3, birthday: 2_600_000, fullyScanned: 3_500_000, reason: 'resync' });
+    const record = (await stored('wallet')) as { bytes: Uint8Array; meta: unknown };
+    expect(new TextDecoder().decode(record.bytes)).toBe('resynced');
+    expect(record.meta).toEqual(meta);
+    expect(await stored('wallet.meta')).toEqual(meta);
+    expect(await stored('birthdayBlock')).toBe('2600000');
+    const previous = (await stored('wallet.backup.previous')) as { bytes: Uint8Array; meta: { epoch: number } };
+    expect(new TextDecoder().decode(previous.bytes)).toBe('v2');
+    expect(previous.meta.epoch).toBe(2);
+    expect(await store.readStaging()).toBeNull();
+    expect(store.walletOrigin(fresh)).toEqual({ epoch: 3, birthday: 2_600_000 });
+    await expect(store.saveWallet(current, bytesOf('late'), { reason: 'sync' })).rejects.toBeInstanceOf(
+      store.StaleWalletError,
+    );
+    await store.saveWallet(fresh, bytesOf('v4'), { reason: 'sync' });
+    expect(await store.peekStoredEpoch()).toBe(4);
+  });
+
+  it('promotes over an empty store at epoch 1', async () => {
+    const store = await freshStore();
+    const fresh = {};
+    await store.stageWallet(fresh, bytesOf('first'), stagedMeta);
+    const meta = await store.promoteStaging(fresh);
+    expect(meta.epoch).toBe(1);
+    expect(await stored('wallet.backup.previous')).toBeUndefined();
+  });
+
+  it('rejects promotion when nothing is staged and changes nothing', async () => {
+    const store = await freshStore();
+    const current = {};
+    store.registerWallet(current, { epoch: null, birthday: null });
+    await store.saveWallet(current, bytesOf('v1'), { reason: 'sync' });
+
+    await expect(store.promoteStaging({})).rejects.toThrow(/no checkpointed resync/);
+    expect(await store.peekStoredEpoch()).toBe(1);
+  });
+
+  it('leaves the wallet untouched and the checkpoint in place when the promotion fails midway', async () => {
+    const store = await freshStore();
+    const current = {};
+    store.registerWallet(current, { epoch: null, birthday: null });
+    await store.saveWallet(current, bytesOf('v1'), { reason: 'sync' });
+    const fresh = {};
+    await store.stageWallet(fresh, bytesOf('partial'), stagedMeta);
+
+    // The wallet record is already written inside the transaction when the metadata write
+    // throws; the whole transaction must roll back.
+    const put = IDBObjectStore.prototype.put;
+    const spy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (
+      this: IDBObjectStore,
+      value: unknown,
+      key?: IDBValidKey,
+    ) {
+      if (key === 'wallet.meta') throw new Error('disk full');
+      return put.call(this, value, key);
+    });
+    try {
+      await expect(store.promoteStaging(fresh)).rejects.toThrow('disk full');
+    } finally {
+      spy.mockRestore();
+    }
+
+    const record = (await stored('wallet')) as { bytes: Uint8Array; meta: { epoch: number } };
+    expect(new TextDecoder().decode(record.bytes)).toBe('v1');
+    expect(record.meta.epoch).toBe(1);
+    expect(await stored('wallet.backup.previous')).toBeUndefined();
+    const staged = (await store.readStaging())!;
+    expect(new TextDecoder().decode(staged.bytes)).toBe('partial');
+    expect(store.walletOrigin(fresh)).toBeUndefined();
+  });
+
+  it('clearStaging removes the checkpoint only', async () => {
+    const store = await freshStore();
+    const current = {};
+    store.registerWallet(current, { epoch: null, birthday: null });
+    await store.saveWallet(current, bytesOf('v1'), { reason: 'sync' });
+    await store.stageWallet({}, bytesOf('partial'), stagedMeta);
+
+    await store.clearStaging();
+
+    expect(await store.readStaging()).toBeNull();
+    expect(await store.peekStoredEpoch()).toBe(1);
+    await expect(store.clearStaging()).resolves.toBeUndefined();
+  });
+});
