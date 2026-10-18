@@ -502,7 +502,7 @@ impl WebWallet {
     /// # Examples
     ///
     /// ```javascript
-    /// if (wallet.is_closed()) { /* reload */ }
+    /// if (wallet.is_closed()) { reloadWallet(); }
     /// ```
     pub fn is_closed(&self) -> bool {
         self.inner.is_closed()
