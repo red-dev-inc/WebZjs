@@ -12,10 +12,15 @@ import { FullResyncOptions, trackFullResync } from './fullResyncQueue';
 import {
   SaveReason,
   StaleWalletError,
+  clearStaging,
   markSuperseded,
+  promoteStaging,
+  readStaging,
   readWalletBackup,
   registerWallet,
   saveWallet,
+  stageWallet,
+  stagingIsResumable,
   walletOrigin,
 } from '../storage/walletStore';
 import { readBlobBirthday } from '../storage/walletBlobMeta';
@@ -71,7 +76,26 @@ interface WebzjsActions {
   syncStateWithWallet: (options?: SyncOptions) => Promise<void>;
   connectWebZjsSnap: () => Promise<void>;
   fullResync: (customBirthday?: number, options?: FullResyncOptions) => Promise<void>;
+  /** Drops the checkpoint of an interrupted resync. The current wallet is not touched. */
+  discardResync: () => Promise<void>;
   recoverWallet: (options?: RecoverOptions) => Promise<void>;
+}
+
+// A full resync checkpoints its progress to storage every this many sync steps (a step is one
+// batch of about 2500 blocks), so a reload loses at most that much work.
+const STAGE_EVERY_STEPS = 4;
+// Backoff after a failed step: this doubles per consecutive failure, and the resync gives up
+// after MAX_CONSECUTIVE_FAILURES in a row. There is no limit on the number of steps.
+const SYNC_STEP_RETRY_DELAY = 2000;
+const MAX_CONSECUTIVE_FAILURES = 4;
+
+/**
+ * Errors after which no retry can succeed: the instance was closed (it has been replaced) or
+ * the sync worker trapped (only a page reload brings it back).
+ */
+function isUnrecoverableWalletError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes('instance was closed') || message.includes('sync worker stopped');
 }
 
 /** Parses the seed fingerprint the snap returns, as hex or as a byte object. */
@@ -94,7 +118,7 @@ async function withRetry<T>(
     try {
       return await fn();
     } catch (err) {
-      if (attempt === retries) throw err;
+      if (attempt === retries || isUnrecoverableWalletError(err)) throw err;
       const delay = baseDelay * Math.pow(2, attempt - 1);
       console.warn(`${label} failed (attempt ${attempt}/${retries}), retrying in ${delay}ms:`, err);
       await new Promise(r => setTimeout(r, delay));
@@ -113,8 +137,33 @@ export function useWebZjsActions(): WebzjsActions {
   // Refs for values read inside triggerRescan but that shouldn't cause it to be recreated
   const fullySyncedRef = useRef(state.summary?.fully_scanned_height);
   const chainHeightRef = useRef(state.chainHeight);
+  const currentWalletRef = useRef(state.webWallet);
   fullySyncedRef.current = state.summary?.fully_scanned_height;
   chainHeightRef.current = state.chainHeight;
+  currentWalletRef.current = state.webWallet;
+
+  /**
+   * Drives `sync_step` until the wallet reports no more work. The loop is tagged with the
+   * instance it started on and stops, returning false, as soon as that instance is closed or
+   * no longer the one in state, so a step queued for a replaced wallet never runs on it.
+   */
+  const syncToTip = useCallback(async (webWallet: WebWallet): Promise<boolean> => {
+    const id = webWallet.instance_id;
+    let first = true;
+    for (;;) {
+      if (webWallet.is_closed() || currentWalletRef.current !== webWallet) {
+        console.info(`Sync loop for wallet ${id} stopped: the instance was replaced`);
+        return false;
+      }
+      const more = await withRetry(() => webWallet.sync_step(first), {
+        label: `sync_step (${id})`,
+        retries: 2,
+        baseDelay: 3000,
+      });
+      first = false;
+      if (!more) return true;
+    }
+  }, []);
 
   /**
    * Read-merge-write helper for snap state. Always reads existing state first,
@@ -449,7 +498,7 @@ export function useWebZjsActions(): WebzjsActions {
             dispatch({ type: 'set-chain-height', payload: latestBlock });
             // Only sync if chain has advanced
             if (fullySyncedHeight < Number(latestBlock)) {
-              await withRetry(() => webWallet.sync(), { label: 'sync', retries: 2, baseDelay: 3000 });
+              if (!(await syncToTip(webWallet))) return;
               await syncStateWithWallet();
               await flushDbToStore();
             }
@@ -461,7 +510,7 @@ export function useWebZjsActions(): WebzjsActions {
       }
 
       try {
-        await withRetry(() => webWallet.sync(), { label: 'sync', retries: 2, baseDelay: 3000 });
+        if (!(await syncToTip(webWallet))) return;
         await syncStateWithWallet();
         await flushDbToStore();
       } catch (err: unknown) {
@@ -477,17 +526,21 @@ export function useWebZjsActions(): WebzjsActions {
     syncStateWithWallet,
     flushDbToStore,
     repairSnapBirthday,
+    syncToTip,
   ]);
 
   /**
    * Performs a full wallet resync by:
-   * 1. Creating a fresh wallet in a local variable (old wallet stays in state)
-   * 2. Re-importing the account with the original birthday
-   * 3. Syncing from birthday with retry
-   * 4. Only on success: swapping the new wallet into state + IndexedDB
+   * 1. Creating a fresh wallet in a local variable (old wallet stays in state), or, when
+   *    resuming, rebuilding it from the checkpoint of an earlier resync
+   * 2. Re-importing the account with the original birthday (not when resuming)
+   * 3. Syncing from there one step at a time, checkpointing to `wallet.staging` every few
+   *    steps so that a reload can resume instead of starting over
+   * 4. Only on success: promoting the checkpoint to the stored wallet in one transaction,
+   *    closing the old instance, and swapping the new one into state
    *
-   * If any gRPC call fails, the old wallet remains untouched in state and IndexedDB.
-   * This is a user-initiated action for recovering from sync issues.
+   * A failure before promotion leaves the old wallet untouched in state and storage and the
+   * checkpoint in place for Resume. Aborting between steps drops the checkpoint.
    */
   const fullResync = useCallback(async (customBirthday?: number, options?: FullResyncOptions) => {
     if (!installedSnap) {
@@ -495,120 +548,148 @@ export function useWebZjsActions(): WebzjsActions {
       return;
     }
     // Queued behind any periodic rescan that is already running. The caller may cancel
-    // while it waits; once the job starts it runs to completion.
+    // while it waits, and between steps once it runs.
     const run = runExclusiveSync(dispatch, async () => {
       if (options?.signal?.aborted) {
         console.info('Full resync: cancelled before it started');
         return;
       }
       options?.onStart?.();
+      const oldWallet = state.webWallet;
+      let freshWallet: WebWallet | null = null;
       try {
-        // 1. Get the stored birthday from snap state
-        const snapState = (await invokeSnap({
-          method: 'getSnapStete',
-        })) as SnapState | null;
+        let birthdayBlock: number | undefined;
+        let accountId: number;
 
-        // Birthday precedence: the value typed in, then the current wallet's own birthday
-        // (read from its stored bytes), then the snap's mirror. A custom birthday is only
-        // persisted once the resync succeeds (step 6), so a failed resync leaves the old
-        // wallet and its stored birthday consistent.
-        const oldWallet = state.webWallet;
-        const birthdayBlock = customBirthday
-          ?? (oldWallet ? walletOrigin(oldWallet)?.birthday ?? undefined : undefined)
-          ?? (snapState?.webWalletSyncStartBlock
-            ? Number(snapState.webWalletSyncStartBlock)
-            : undefined);
-
-        // 2. Get credentials from snap
-        const viewingKey = (await invokeSnap({
-          method: 'getViewingKey',
-        })) as string;
-
-        const seedFingerprint = seedFingerprintFromSnap(await invokeSnap({
-          method: 'getSeedFingerprint',
-        }));
-
-        // 3. Create fresh wallet in LOCAL variable: old wallet stays in React state + IndexedDB
-        console.info('Full resync: Creating fresh wallet (old wallet preserved as fallback)');
-        const freshWallet = new WebWallet('main', MAINNET_LIGHTWALLETD_PROXY, 1, 1, null);
-
-        // 4. Re-import the account with retry (makes GetTreeState gRPC call)
-        console.info(`Full resync: Re-importing account with birthday ${birthdayBlock}`);
-        const accountId = await withRetry(
-          () => freshWallet.create_account_ufvk('account-0', viewingKey, seedFingerprint, 0, birthdayBlock),
-          { label: 'create_account_ufvk', retries: 3, baseDelay: 2000 },
-        );
-
-        // 5. Sync from birthday in a loop: each sync() makes incremental progress
-        //    The Rust WASM wallet resumes from where it left off on each call.
-        //    With many blocks to scan, one sync() call can't finish before the
-        //    lightwalletd proxy drops the connection, so we keep calling it.
-        console.info('Full resync: Starting sync from birthday');
-        const MAX_SYNC_ROUNDS = 20;
-        const SYNC_ROUND_DELAY = 2000; // ms between rounds to let proxy recover
-        let consecutiveFailures = 0;
-        const MAX_CONSECUTIVE_FAILURES = 4;
-
-        for (let round = 1; round <= MAX_SYNC_ROUNDS; round++) {
+        if (options?.resume) {
+          // 1b. Rebuild the wallet from the checkpoint. The account is already in it.
+          const staged = await readStaging();
+          if (!staged) {
+            throw new Error('There is no interrupted resync to resume');
+          }
+          birthdayBlock = staged.meta.birthday ?? undefined;
+          console.info(
+            `Full resync: resuming from the checkpoint at ${staged.meta.fullyScanned} (birthday ${birthdayBlock})`,
+          );
           try {
-            console.info(`Full resync: sync round ${round}/${MAX_SYNC_ROUNDS}`);
-            await freshWallet.sync();
+            freshWallet = new WebWallet('main', MAINNET_LIGHTWALLETD_PROXY, 1, 1, staged.bytes);
+          } catch (decodeErr) {
+            await clearStaging();
+            dispatch({ type: 'set-resumable-resync', payload: null });
+            throw new Error(`The resync checkpoint could not be read and was discarded: ${String(decodeErr)}`);
+          }
+          const stagedSummary = await freshWallet.get_wallet_summary();
+          if (!stagedSummary?.account_balances?.length) {
+            throw new Error('The resync checkpoint holds no account');
+          }
+          accountId = stagedSummary.account_balances[0][0];
+        } else {
+          // 1. Get the stored birthday from snap state
+          const snapState = (await invokeSnap({
+            method: 'getSnapStete',
+          })) as SnapState | null;
+
+          // Birthday precedence: the value typed in, then the current wallet's own birthday
+          // (read from its stored bytes), then the snap's mirror. A custom birthday is only
+          // persisted once the resync succeeds (step 7), so a failed resync leaves the old
+          // wallet and its stored birthday consistent.
+          birthdayBlock = customBirthday
+            ?? (oldWallet ? walletOrigin(oldWallet)?.birthday ?? undefined : undefined)
+            ?? (snapState?.webWalletSyncStartBlock
+              ? Number(snapState.webWalletSyncStartBlock)
+              : undefined);
+
+          // 2. Get credentials from snap
+          const viewingKey = (await invokeSnap({
+            method: 'getViewingKey',
+          })) as string;
+
+          const seedFingerprint = seedFingerprintFromSnap(await invokeSnap({
+            method: 'getSeedFingerprint',
+          }));
+
+          // 3. Create fresh wallet in LOCAL variable: old wallet stays in React state + IndexedDB
+          console.info('Full resync: Creating fresh wallet (old wallet preserved as fallback)');
+          freshWallet = new WebWallet('main', MAINNET_LIGHTWALLETD_PROXY, 1, 1, null);
+          const created = freshWallet;
+
+          // 4. Re-import the account with retry (makes GetTreeState gRPC call)
+          console.info(`Full resync: Re-importing account with birthday ${birthdayBlock}`);
+          accountId = await withRetry(
+            () => created.create_account_ufvk('account-0', viewingKey, seedFingerprint, 0, birthdayBlock),
+            { label: 'create_account_ufvk', retries: 3, baseDelay: 2000 },
+          );
+        }
+        const wallet = freshWallet;
+        // Never persisted as `wallet` yet; the birthday is the fallback for the checkpoint metadata.
+        registerWallet(wallet, { epoch: null, birthday: birthdayBlock ?? null });
+
+        // 5. Sync one bounded step at a time. Every STAGE_EVERY_STEPS steps, and once the
+        //    wallet reports no more work, the progress so far is checkpointed to storage.
+        //    `first` refreshes the subtree roots: on the first step, and again after a pause.
+        console.info('Full resync: Starting sync');
+        let first = true;
+        let steps = 0;
+        let consecutiveFailures = 0;
+        for (;;) {
+          if (options?.signal?.aborted) {
+            console.info(`Full resync: cancelled after ${steps} steps; dropping the checkpoint`);
+            await clearStaging();
+            dispatch({ type: 'set-resumable-resync', payload: null });
+            wallet.close();
+            return;
+          }
+          let more: boolean;
+          try {
+            more = await wallet.sync_step(first);
+            first = false;
             consecutiveFailures = 0;
-
-            // Check if fully synced
-            const summary = await freshWallet.get_wallet_summary();
-            const chainTip = Number(await freshWallet.get_latest_block());
-            const scannedHeight = summary?.fully_scanned_height ?? 0;
-
-            console.info(`Full resync: scanned to ${scannedHeight} / ${chainTip}`);
-
-            if (scannedHeight >= chainTip - 2) {
-              console.info('Full resync: Fully synced');
-              break;
-            }
-
-            // Not done yet: pause before next round
-            if (round < MAX_SYNC_ROUNDS) {
-              await new Promise(r => setTimeout(r, SYNC_ROUND_DELAY));
-            }
           } catch (syncErr) {
             consecutiveFailures++;
-            console.debug(`Full resync: sync round ${round} failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, syncErr);
-
-            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-              throw syncErr; // give up after too many consecutive failures
+            console.debug(`Full resync: step ${steps + 1} failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, syncErr);
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES || isUnrecoverableWalletError(syncErr)) {
+              throw syncErr;
             }
-
-            // Back off longer after failures
-            const backoff = SYNC_ROUND_DELAY * Math.pow(2, consecutiveFailures - 1);
-            console.debug(`Full resync: backing off ${backoff}ms before retry`);
+            const backoff = SYNC_STEP_RETRY_DELAY * Math.pow(2, consecutiveFailures - 1);
+            console.debug(`Full resync: backing off ${backoff}ms before retrying`);
             await new Promise(r => setTimeout(r, backoff));
+            first = true;
+            continue;
           }
+          steps++;
 
-          if (round === MAX_SYNC_ROUNDS) {
-            console.info('Full resync: not at chain tip after the last round; the periodic rescan will finish catching up');
+          if (steps % STAGE_EVERY_STEPS === 0 || !more) {
+            const bytes = await wallet.db_to_bytes();
+            const summary = await wallet.get_wallet_summary();
+            const chainTip = Number(await wallet.get_latest_block());
+            const scannedHeight = summary?.fully_scanned_height ?? null;
+            await stageWallet(wallet, bytes, {
+              birthday: birthdayBlock ?? null,
+              fullyScanned: scannedHeight,
+              chainTip: Number.isFinite(chainTip) ? chainTip : null,
+            });
+            console.info(`Full resync: checkpointed after ${steps} steps at ${scannedHeight} / ${chainTip}`);
           }
+          if (!more) break;
         }
 
-        // 6. SUCCESS: persist the fresh wallet FIRST, together with its birthday, as a forced
-        //    write that supersedes whatever is stored. Only then make it visible. A failure
-        //    before this point leaves storage untouched; after it, storage already holds the
-        //    resynced wallet, so nothing that follows can lose it.
-        const summary = await freshWallet.get_wallet_summary();
-        const chainHeight = await freshWallet.get_latest_block();
-        registerWallet(freshWallet, { epoch: null, birthday: birthdayBlock ?? null });
-        const bytes = await freshWallet.db_to_bytes();
-        const saved = await saveWallet(freshWallet, bytes, {
-          reason: 'resync',
-          force: true,
-          birthday: birthdayBlock ?? null,
-          fullyScanned: summary?.fully_scanned_height ?? null,
-        });
-        console.info(`Full resync: persisted as epoch ${saved.epoch}, swapping wallet into state`);
+        // 6. SUCCESS: promote the checkpoint to the stored wallet in one transaction, with its
+        //    birthday, superseding whatever is stored. Only then make it visible. A failure
+        //    before this point leaves storage untouched (the checkpoint can be resumed); after
+        //    it, storage already holds the resynced wallet, so nothing that follows can lose it.
+        const summary = await wallet.get_wallet_summary();
+        const chainHeight = await wallet.get_latest_block();
+        const promoted = await promoteStaging(wallet);
+        console.info(`Full resync: promoted as epoch ${promoted.epoch}, swapping wallet into state`);
 
-        // 7. Retire the old instance and swap the fresh one in.
-        if (oldWallet) markSuperseded(oldWallet);
-        dispatch({ type: 'set-web-wallet', payload: freshWallet });
+        // 7. Retire the old instance (no step queued for it can write into it any more) and
+        //    swap the fresh one in.
+        if (oldWallet) {
+          oldWallet.close();
+          markSuperseded(oldWallet);
+        }
+        dispatch({ type: 'set-resumable-resync', payload: null });
+        dispatch({ type: 'set-web-wallet', payload: wallet });
         dispatch({ type: 'set-active-account', payload: accountId });
         if (summary) {
           dispatch({ type: 'set-summary', payload: summary });
@@ -632,13 +713,35 @@ export function useWebZjsActions(): WebzjsActions {
 
         console.info('Full resync: Complete');
       } catch (err: unknown) {
-        // FAILURE: old wallet remains in state + IndexedDB, user sees last known balances
+        // FAILURE: old wallet remains in state + IndexedDB, user sees last known balances.
+        // The checkpoint, if one was taken, is offered for Resume.
         console.error('Full resync failed (old wallet preserved):', err);
         dispatch({ type: 'set-error', payload: String(err) });
+        try {
+          freshWallet?.close();
+        } catch (closeErr) {
+          console.warn('Full resync: could not close the abandoned instance:', closeErr);
+        }
+        try {
+          const staged = await readStaging();
+          dispatch({
+            type: 'set-resumable-resync',
+            payload: staged && stagingIsResumable(staged.meta)
+              ? { birthday: staged.meta.birthday, fullyScanned: staged.meta.fullyScanned, chainTip: staged.meta.chainTip }
+              : null,
+          });
+        } catch (readErr) {
+          console.warn('Full resync: could not read the checkpoint:', readErr);
+        }
       }
     });
     await trackFullResync(run);
   }, [installedSnap, state.webWallet, invokeSnap, dispatch, updateSnapState, cacheBalanceInSnap]);
+
+  const discardResync = useCallback(async () => {
+    await clearStaging();
+    dispatch({ type: 'set-resumable-resync', payload: null });
+  }, [dispatch]);
 
   /**
    * Recovers the wallet from snap credentials when IndexedDB data is empty or incompatible.
@@ -732,6 +835,7 @@ export function useWebZjsActions(): WebzjsActions {
     syncStateWithWallet,
     connectWebZjsSnap,
     fullResync,
+    discardResync,
     recoverWallet,
   };
 }

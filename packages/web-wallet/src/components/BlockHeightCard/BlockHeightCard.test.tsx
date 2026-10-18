@@ -16,6 +16,7 @@ const baseState: WebZjsState = {
   initialized: true,
   storedWalletUnreadable: null,
   isWriter: true,
+  resumableResync: null,
 };
 
 function openForm() {
@@ -116,5 +117,65 @@ describe('BlockHeightCard full resync form', () => {
     await act(async () => { fireEvent.click(screen.getByText('Confirm Resync')); });
 
     expect(onFullResync).toHaveBeenCalledWith(undefined, expect.anything());
+  });
+});
+
+describe('BlockHeightCard interrupted resync', () => {
+  const resumableState: WebZjsState = {
+    ...baseState,
+    resumableResync: { birthday: 2_600_000, fullyScanned: 2_900_000, chainTip: 3_500_000 },
+  };
+
+  it('offers nothing when no resync was interrupted', () => {
+    render(<BlockHeightCard state={baseState} onFullResync={vi.fn()} onDiscardResync={vi.fn()} />);
+    expect(screen.queryByText('Resume')).not.toBeInTheDocument();
+    expect(screen.queryByText('Discard')).not.toBeInTheDocument();
+  });
+
+  it('describes the interrupted resync and resumes it from its checkpoint', async () => {
+    let finish!: () => void;
+    const onFullResync = vi.fn(
+      (_birthday?: number, options?: FullResyncOptions) =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+          options?.onStart?.();
+        }),
+    );
+    render(<BlockHeightCard state={resumableState} onFullResync={onFullResync} onDiscardResync={vi.fn()} />);
+
+    expect(screen.getByText('A resync from block 2600000 stopped at 2900000 of 3500000.')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByText('Resume')); });
+
+    expect(onFullResync).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ resume: true, signal: expect.any(AbortSignal) }),
+    );
+    expect(screen.getByText('Resuming…')).toBeDisabled();
+    expect(screen.getByText('Discard')).toBeDisabled();
+
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.getByText('Resume')).toBeEnabled());
+  });
+
+  it('discards the checkpoint without starting a resync', async () => {
+    const onFullResync = vi.fn().mockResolvedValue(undefined);
+    let finish!: () => void;
+    const onDiscardResync = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    render(<BlockHeightCard state={resumableState} onFullResync={onFullResync} onDiscardResync={onDiscardResync} />);
+
+    await act(async () => { fireEvent.click(screen.getByText('Discard')); });
+
+    expect(onDiscardResync).toHaveBeenCalledTimes(1);
+    expect(onFullResync).not.toHaveBeenCalled();
+    expect(screen.getByText('Discarding…')).toBeDisabled();
+    expect(screen.getByText('Resume')).toBeDisabled();
+
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.getByText('Discard')).toBeEnabled());
+  });
+
+  it('keeps the regular Full Resync available alongside the offer to resume', () => {
+    render(<BlockHeightCard state={resumableState} onFullResync={vi.fn()} onDiscardResync={vi.fn()} />);
+    expect(screen.getByText('Full Resync')).toBeEnabled();
   });
 });

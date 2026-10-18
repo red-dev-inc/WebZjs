@@ -12,11 +12,14 @@ export const BlockHeightCard: FC<{
   state: WebZjsState;
   syncedFrom?: string;
   onFullResync?: (customBirthday?: number, options?: FullResyncOptions) => Promise<void>;
-}> = ({ state, syncedFrom, onFullResync }) => {
+  /** Drops the checkpoint of an interrupted resync. */
+  onDiscardResync?: () => Promise<void>;
+}> = ({ state, syncedFrom, onFullResync, onDiscardResync }) => {
   const [showConfirm, setShowConfirm] = useState(false);
   const [customBirthday, setCustomBirthday] = useState('');
   const [phase, setPhase] = useState<ResyncPhase>(() => (pendingFullResync() ? 'running' : 'idle'));
   const [birthdayError, setBirthdayError] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const resyncing = phase !== 'idle';
 
@@ -35,6 +38,27 @@ export const BlockHeightCard: FC<{
   }, []);
 
   const chainHeight = state.chainHeight ? Number(state.chainHeight) : undefined;
+  const resumable = state.resumableResync;
+
+  const startResync = async (birthday: number | undefined, resume: boolean) => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setPhase('queued');
+    try {
+      // Queued behind any background sync that is running; the form stays open and can
+      // still be cancelled until the resync itself starts.
+      await onFullResync?.(birthday, {
+        signal: controller.signal,
+        onStart: () => setPhase('running'),
+        resume,
+      });
+    } finally {
+      abortRef.current = null;
+      setPhase('idle');
+      setShowConfirm(false);
+      setCustomBirthday('');
+    }
+  };
 
   const handleResync = async () => {
     const birthday = customBirthday ? parseInt(customBirthday, 10) : undefined;
@@ -51,21 +75,17 @@ export const BlockHeightCard: FC<{
       return;
     }
     setBirthdayError(null);
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setPhase('queued');
+    await startResync(birthday, false);
+  };
+
+  const handleResume = () => startResync(undefined, true);
+
+  const handleDiscard = async () => {
+    setDiscarding(true);
     try {
-      // Queued behind any background sync that is running; the form stays open and can
-      // still be cancelled until the resync itself starts.
-      await onFullResync?.(birthday, {
-        signal: controller.signal,
-        onStart: () => setPhase('running'),
-      });
+      await onDiscardResync?.();
     } finally {
-      abortRef.current = null;
-      setPhase('idle');
-      setShowConfirm(false);
-      setCustomBirthday('');
+      setDiscarding(false);
     }
   };
 
@@ -136,6 +156,34 @@ export const BlockHeightCard: FC<{
             </div>
           </div>
         </>
+      )}
+      {resumable && onFullResync && (
+        <div className="self-stretch mt-4 pt-4 border-t border-[#e0e0e0] flex flex-col gap-2">
+          <p className="text-[#595959] text-xs">
+            A resync from block {resumable.birthday ?? '?'} stopped at{' '}
+            {resumable.fullyScanned ?? resumable.birthday ?? '?'} of {resumable.chainTip ?? '?'}.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleResume}
+              disabled={resyncing || discarding}
+              className="px-3 py-1 bg-[#f5a623] text-white text-sm font-medium rounded hover:bg-[#e09000] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {phase === 'queued'
+                ? 'Waiting for the current sync…'
+                : phase === 'running'
+                  ? 'Resuming…'
+                  : 'Resume'}
+            </button>
+            <button
+              onClick={handleDiscard}
+              disabled={resyncing || discarding}
+              className="px-3 py-1 bg-[#e0e0e0] text-[#595959] text-sm font-medium rounded hover:bg-[#d0d0d0] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {discarding ? 'Discarding…' : 'Discard'}
+            </button>
+          </div>
+        </div>
       )}
       {onFullResync && (
         <div className="self-stretch mt-4 pt-4 border-t border-[#e0e0e0]">

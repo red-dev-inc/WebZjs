@@ -9,6 +9,7 @@ import React, {
 
 import initWebzJSWallet, {
   initThreadPool,
+  report_sync_worker_trap,
   WalletSummary,
   WebWallet,
 } from '@zcashcommunitygrants/webzjs-wallet';
@@ -22,9 +23,20 @@ import {
   markSuperseded,
   onWalletChanged,
   peekStoredEpoch,
+  readStaging,
   registerWallet,
+  stagingIsResumable,
   walletOrigin,
+  writesSettled,
 } from '../storage/walletStore';
+import { isWasmTrapEvent } from '../utils/wasmTrap';
+
+/** An interrupted full resync whose checkpoint is in storage and can be continued. */
+export interface ResumableResync {
+  birthday: number | null;
+  fullyScanned: number | null;
+  chainTip: number | null;
+}
 
 export interface WebZjsState {
   webWallet: WebWallet | null;
@@ -40,6 +52,8 @@ export interface WebZjsState {
   storedWalletUnreadable: { error: string } | null;
   /** True once this tab holds the single-writer lock and may run periodic syncs. */
   isWriter: boolean;
+  /** Set when a full resync was interrupted (reload, failure) and left a checkpoint behind. */
+  resumableResync: ResumableResync | null;
 }
 
 type Action =
@@ -52,7 +66,8 @@ type Action =
   | { type: 'set-loading'; payload: boolean }
   | { type: 'set-initialized'; payload: boolean }
   | { type: 'set-stored-wallet-unreadable'; payload: { error: string } | null }
-  | { type: 'set-writer'; payload: boolean };
+  | { type: 'set-writer'; payload: boolean }
+  | { type: 'set-resumable-resync'; payload: ResumableResync | null };
 
 const initialState: WebZjsState = {
   webWallet: null,
@@ -66,6 +81,7 @@ const initialState: WebZjsState = {
   initialized: false,
   storedWalletUnreadable: null,
   isWriter: false,
+  resumableResync: null,
 };
 
 function reducer(state: WebZjsState, action: Action): WebZjsState {
@@ -90,6 +106,8 @@ function reducer(state: WebZjsState, action: Action): WebZjsState {
       return { ...state, storedWalletUnreadable: action.payload };
     case 'set-writer':
       return { ...state, isWriter: action.payload };
+    case 'set-resumable-resync':
+      return { ...state, resumableResync: action.payload };
     default:
       return state;
   }
@@ -197,6 +215,26 @@ export const WebZjsProvider = ({ children }: { children: React.ReactNode }) => {
 
       await applyLoadedWallet(wallet);
 
+      // A resync that was interrupted by a reload left its checkpoint behind; offer to continue it.
+      try {
+        const staged = await readStaging();
+        if (staged && stagingIsResumable(staged.meta)) {
+          console.info(
+            `Found an interrupted resync checkpoint at ${staged.meta.fullyScanned} of ${staged.meta.chainTip}`,
+          );
+          dispatch({
+            type: 'set-resumable-resync',
+            payload: {
+              birthday: staged.meta.birthday,
+              fullyScanned: staged.meta.fullyScanned,
+              chainTip: staged.meta.chainTip,
+            },
+          });
+        }
+      } catch (err) {
+        console.warn('Could not check for an interrupted resync:', err);
+      }
+
       if (!writerClaimedRef.current) {
         writerClaimedRef.current = true;
         claimWriterRole(() => dispatch({ type: 'set-writer', payload: true }));
@@ -247,6 +285,12 @@ export const WebZjsProvider = ({ children }: { children: React.ReactNode }) => {
       if (current) markSuperseded(current);
       dispatch({ type: 'set-stored-wallet-unreadable', payload: null });
       await applyLoadedWallet(loaded.wallet);
+      if (current) {
+        // The replacement is in state; once any save of the old instance has settled, close
+        // it so that a sync step still queued for it is refused instead of run.
+        await writesSettled();
+        current.close();
+      }
     } catch (err) {
       console.error('Could not reload the wallet from storage:', err);
     } finally {
@@ -277,6 +321,41 @@ export const WebZjsProvider = ({ children }: { children: React.ReactNode }) => {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [reloadWallet]);
+
+  // A trap in the wasm sync worker (a Rust panic) never rejects the call that caused it; the
+  // browser reports it on the window instead. Tell the module so that every pending and later
+  // sync call rejects promptly, and tell the user that a reload is needed.
+  const trapReportedRef = useRef(false);
+  useEffect(() => {
+    const onTrap = () => {
+      if (trapReportedRef.current) return;
+      trapReportedRef.current = true;
+      try {
+        report_sync_worker_trap();
+      } catch (err) {
+        console.warn('Could not report the sync worker trap to the wallet module:', err);
+      }
+      dispatch({
+        type: 'set-error',
+        payload:
+          'The wallet engine hit an internal error. Reload the page to continue; your last saved state is intact.',
+      });
+    };
+    const onError = (event: ErrorEvent) => {
+      if (isWasmTrapEvent(event.message, event.error)) onTrap();
+    };
+    const onRejection = (event: PromiseRejectionEvent) => {
+      const reason: unknown = event.reason;
+      const message = reason instanceof Error ? reason.message : reason;
+      if (isWasmTrapEvent(message, reason)) onTrap();
+    };
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
+  }, []);
 
   useEffect(() => {
     if (state.error) {
