@@ -745,11 +745,15 @@ where
         };
 
         let prover = LocalTxProver::bundled();
+        // The Ironwood bundle (NU6.3) is a second Orchard-protocol bundle and is proven with the
+        // same circuit; without its proof, extraction fails on any payment to a shielded
+        // address, since those are delivered through Ironwood after NU6.3.
+        let orchard_pk = orchard::circuit::ProvingKey::build(orchard_circuit_version);
         let pczt = Prover::new(pczt)
-            .create_orchard_proof(&orchard::circuit::ProvingKey::build(
-                orchard_circuit_version,
-            ))
+            .create_orchard_proof(&orchard_pk)
             .map_err(|e| Error::PcztProve(format!("Failed to create Orchard proof: {e:?}")))?
+            .create_ironwood_proof(&orchard_pk)
+            .map_err(|e| Error::PcztProve(format!("Failed to create Ironwood proof: {e:?}")))?
             .create_sapling_proofs(&prover, &prover)
             .map_err(|e| Error::PcztProve(format!("Failed to create Sapling proofs: {e:?}")))?
             .finish();

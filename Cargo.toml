@@ -36,8 +36,9 @@ tokio_with_wasm = { version = "0.7.1", features = ["rt", "rt-multi-thread", "syn
 ## rc crates (pczt, client_backend, zip321, sqlite) keep the explicit -rc.1 so the pre-release matches.
 zcash_keys = { version = "0.15.0", features = ["transparent-inputs", "orchard", "sapling", "unstable"] }
 zcash_client_backend = { version = "0.24.0-rc.1", default-features = false, features = ["sync", "lightwalletd-tonic", "orchard"] }
-# TODO: switch back to red-dev-inc branch "feat/snap-nu63" once the MemBlockCache fix is merged there.
-zcash_client_memory = { git = "https://github.com/sqhell/zcash_client_memory", rev = "0e6a91a6bbed1b622805e03ead26045e699ed6e7", features = ["orchard", "transparent-inputs"] }
+# sqhell fork of red-dev-inc "feat/snap-nu63" with the eager block-cache delete, nullifier-map pruning
+# and Ironwood (NU6.3) pool support. Switch back to red-dev-inc once those land there.
+zcash_client_memory = { git = "https://github.com/sqhell/zcash_client_memory", rev = "d6f7765640cf733ff611fb01c82c5749061088f8", features = ["orchard", "transparent-inputs"] }
 zcash_primitives = { version = "0.29.0" }
 zcash_transparent = { version = "0.9.0", default-features = false }
 zcash_address = { version = "0.13.0" }
@@ -96,18 +97,18 @@ byte-unit = { version = "5.1.4", features = ["byte"] }
 # while librustzcash pulls the git rev -> two `orchard` versions -> trait mismatch. Drop once it lands
 # in an orchard release.
 orchard              = { git = "https://github.com/zcash/orchard.git", rev = "3bd2b736d1273226595773265313fc3f3428af16" }
-equihash             = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zcash_address        = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zcash_client_backend = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zcash_client_sqlite  = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zcash_encoding       = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zcash_keys           = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zcash_protocol       = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zip321               = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zcash_primitives     = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zcash_proofs         = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-pczt                 = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
-zcash_transparent    = { git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2" }
+equihash             = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zcash_address        = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zcash_client_backend = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zcash_client_sqlite  = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zcash_encoding       = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zcash_keys           = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zcash_protocol       = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zip321               = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zcash_primitives     = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zcash_proofs         = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+pczt                 = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
+zcash_transparent    = { git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c" }
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(wasm_bindgen)', 'cfg(wasm_bindgen_unstable_test_coverage)'] }
