@@ -5,7 +5,7 @@ import { zecToZats } from '../utils';
 import { useWebZjsActions } from './useWebzjsActions';
 import { useState } from 'react';
 import { SignPcztDetails } from '../types/snap';
-import { BROADCAST_STAGE, describeTransferError } from '../utils/describeError';
+import { BROADCAST_STAGE, describeTransferError, TransferFlow } from '../utils/describeError';
 
 interface IUsePczt {
   handlePcztTransaction: (
@@ -122,6 +122,7 @@ export const usePczt = (): IUsePczt => {
       toAddress: string,
       value: string,
     ) => Promise<Pczt>,
+    flow: TransferFlow = 'transfer',
   ) => {
     if (!state.webWallet) return;
     setLastError(null); // Clear any previous error
@@ -190,7 +191,7 @@ export const usePczt = (): IUsePczt => {
       // Auto-sync interval handles catching up with new blocks.
       await syncStateWithWallet();
     } catch (error) {
-      const { summary, detail } = describeTransferError(error, stage, broadcast);
+      const { summary, detail } = describeTransferError(error, stage, flow, broadcast);
       const rawMessage = detail;
 
       // Log full error details for debugging
@@ -254,6 +255,7 @@ export const usePczt = (): IUsePczt => {
         console.info('Shield: pczt_shield returned successfully');
         return pczt;
       },
+      'shield',
     );
   };
 
