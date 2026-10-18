@@ -214,5 +214,58 @@ pub async fn pczt_sign_inner(
         }
     }
 
+    // NU6.3: a bundle that disables cross-address transfers (the Orchard pool from
+    // NU6.3 on) pairs every change output with a zero-valued spend at the wallet's own
+    // change address. The builder gives that spend no dummy key; it is meant to be
+    // signed "through the normal signing flow" by the spend authorizing key matching
+    // its `fvk`. The wallet backend only attaches a ZIP 32 key path to the real spends,
+    // so the loop above never sees these. Try every action with the account key and
+    // keep the signatures the key actually controls (the signer rejects the rest with
+    // `WrongSpendAuthorizingKey`), the same approach librustzcash's own test harness
+    // takes. Without this, extraction fails with `MissingSpendAuthSig`.
+    let ask = orchard::keys::SpendAuthorizingKey::from(usk.orchard());
+    sign_all_controlled_orchard_actions(&mut signer, &ask, OrchardPool::Orchard)?;
+    sign_all_controlled_orchard_actions(&mut signer, &ask, OrchardPool::Ironwood)?;
+
     Ok(signer.finish())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum OrchardPool {
+    Orchard,
+    Ironwood,
+}
+
+/// Signs every action of the given Orchard-protocol bundle that `ask` controls.
+///
+/// Actions spending notes under another key, including dummy spends already signed
+/// by the IO finalizer, are left untouched. Any error other than "wrong key" is
+/// returned.
+fn sign_all_controlled_orchard_actions(
+    signer: &mut Signer,
+    ask: &orchard::keys::SpendAuthorizingKey,
+    pool: OrchardPool,
+) -> Result<(), Error> {
+    use pczt::roles::signer::Error as SignerError;
+
+    for index in 0.. {
+        let result = match pool {
+            OrchardPool::Orchard => signer.sign_orchard(index, ask),
+            OrchardPool::Ironwood => signer.sign_ironwood(index, ask),
+        };
+        match result {
+            Err(SignerError::InvalidIndex) => break,
+            Ok(())
+            | Err(SignerError::OrchardSign(orchard::pczt::SignerError::WrongSpendAuthorizingKey))
+            | Err(SignerError::IronwoodSign(
+                orchard::pczt::SignerError::WrongSpendAuthorizingKey,
+            )) => {}
+            Err(e) => {
+                return Err(Error::PcztSign(format!(
+                    "Failed to sign {pool:?} action {index}: {e:?}"
+                )))
+            }
+        }
+    }
+    Ok(())
 }
