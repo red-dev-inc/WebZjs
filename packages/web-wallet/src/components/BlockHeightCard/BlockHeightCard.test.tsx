@@ -14,6 +14,8 @@ const baseState: WebZjsState = {
   syncInProgress: false,
   loading: false,
   initialized: true,
+  storedWalletUnreadable: null,
+  isWriter: true,
 };
 
 function openForm() {
