@@ -10,22 +10,26 @@ vi.mock('react-router-dom', () => ({
 }));
 
 // Mock contexts
-const mockWebZjsState = {
+const mockWebZjsState: Record<string, unknown> = {
   loading: false,
   activeAccount: null,
   error: null,
+  initialized: false,
+  storedWalletUnreadable: null,
 };
 
 const mockWebZjsDispatch = vi.fn();
 const mockGetAccountData = vi.fn();
 const mockConnectWebZjsSnap = vi.fn();
-const mockInstalledSnap = null;
+const mockRecoverWallet = vi.fn();
+let mockInstalledSnap: { id: string } | null = null;
 let mockIsPendingRequest = false;
 
 vi.mock('../context/WebzjsContext', () => ({
   useWebZjsContext: () => ({
     state: mockWebZjsState,
     dispatch: mockWebZjsDispatch,
+    initWallet: vi.fn(),
   }),
 }));
 
@@ -42,6 +46,7 @@ vi.mock('../hooks', () => ({
   useWebZjsActions: () => ({
     getAccountData: mockGetAccountData,
     connectWebZjsSnap: mockConnectWebZjsSnap,
+    recoverWallet: mockRecoverWallet,
   }),
 }));
 
@@ -63,7 +68,29 @@ describe('Home', () => {
     mockWebZjsState.loading = false;
     mockWebZjsState.activeAccount = null;
     mockWebZjsState.error = null;
+    mockWebZjsState.initialized = false;
+    mockWebZjsState.storedWalletUnreadable = null;
+    mockInstalledSnap = null;
     mockIsPendingRequest = false;
+  });
+
+  it('does not auto-recover over unreadable stored wallet data and offers an explicit discard', async () => {
+    mockInstalledSnap = { id: 'snap' };
+    mockWebZjsState.initialized = true;
+    mockWebZjsState.storedWalletUnreadable = { error: 'bad format' };
+    mockRecoverWallet.mockResolvedValueOnce(undefined);
+
+    render(<Home />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockRecoverWallet).not.toHaveBeenCalled();
+    expect(screen.getByText('The saved wallet could not be read')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Discard unreadable wallet data and recover from MetaMask'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockRecoverWallet).toHaveBeenCalledWith({ replaceUnreadable: true });
+    expect(mockNavigate).toHaveBeenCalledWith('/dashboard/account-summary');
   });
 
   it('renders the home page with connect button', () => {
@@ -93,7 +120,7 @@ describe('Home', () => {
     }));
 
     // Direct manipulation for this test
-    const { rerender } = render(<Home />);
+    render(<Home />);
 
     // Since we're using module-level mock variables, we need to test by updating mockIsPendingRequest
     // The component should show the warning banner
@@ -131,6 +158,7 @@ describe('Home', () => {
 
     const button = screen.getByRole('button');
     fireEvent.click(button);
+    await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(mockConnectWebZjsSnap).toHaveBeenCalledTimes(1);
   });

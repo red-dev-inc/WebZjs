@@ -14,6 +14,7 @@ const Home: React.FC = () => {
   const { isPendingRequest } = useMetaMaskContext();
   const [showResetInstructions, setShowResetInstructions] = useState(false);
   const [recovering, setRecovering] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const recoveryAttemptedRef = useRef(false);
   const connectingRef = useRef(false);
 
@@ -79,7 +80,12 @@ const Home: React.FC = () => {
         return;
       }
 
-      // Case 3: Wallet initialized but no account - attempt recovery (once only)
+      // Case 3: Wallet initialized but no account - attempt recovery (once only).
+      // Never automatically when the stored wallet could not be read: that data is kept
+      // until the user decides what to do with it.
+      if (state.storedWalletUnreadable) {
+        return;
+      }
       if (state.initialized && !recoveryAttemptedRef.current && !connectingRef.current) {
         recoveryAttemptedRef.current = true;
         try {
@@ -97,7 +103,22 @@ const Home: React.FC = () => {
     };
 
     homeReload();
-  }, [state.loading, state.activeAccount, state.initialized, installedSnap, navigate, dispatch, getAccountData, recoverWallet, initWallet]);
+  }, [state.loading, state.activeAccount, state.initialized, state.storedWalletUnreadable, installedSnap, navigate, dispatch, getAccountData, recoverWallet, initWallet]);
+
+  const handleDiscardUnreadable: React.MouseEventHandler<HTMLButtonElement> = async (e) => {
+    e.preventDefault();
+    setDiscarding(true);
+    try {
+      await recoverWallet({ replaceUnreadable: true });
+      navigate('/dashboard/account-summary');
+    } catch (err) {
+      console.error('Recovery over unreadable wallet data failed:', err);
+      dispatch({ type: 'set-error', payload: err instanceof Error ? err : new Error(String(err)) });
+      setShowResetInstructions(true);
+    } finally {
+      setDiscarding(false);
+    }
+  };
 
   return (
     <div className="home-page flex items-start md:items-center justify-center px-4 overflow-y-hidden">
@@ -115,6 +136,26 @@ const Home: React.FC = () => {
             Access the Zcash network from your web browser with the Zcash
             MetaMask Snap
           </p>
+          {state.storedWalletUnreadable && (
+            <div className="w-full space-y-2 bg-amber-50 border border-amber-200 text-amber-900 px-4 py-4 rounded-xl text-sm">
+              <div className="font-medium">The saved wallet could not be read</div>
+              <div>
+                It was kept and backed up in this browser; nothing has been replaced. Discarding
+                it rebuilds the wallet from MetaMask and rescans from the saved birthday.
+              </div>
+              <details>
+                <summary className="cursor-pointer underline">Show error details</summary>
+                <div className="mt-2 whitespace-pre-wrap break-words">{state.storedWalletUnreadable.error}</div>
+              </details>
+              <button
+                disabled={discarding || state.loading}
+                onClick={handleDiscardUnreadable}
+                className={`mt-2 px-4 py-2 rounded-lg bg-amber-600 text-white ${discarding || state.loading ? 'cursor-not-allowed opacity-70' : 'hover:bg-amber-700 cursor-pointer'}`}
+              >
+                {discarding ? 'Recovering...' : 'Discard unreadable wallet data and recover from MetaMask'}
+              </button>
+            </div>
+          )}
           {showResetInstructions && (
             <div className="w-full space-y-2 bg-red-50 border border-red-200 text-red-800 px-4 py-4 rounded-xl">
               <div>Error occurred while loading the wallet data, please reset the wallet</div>
