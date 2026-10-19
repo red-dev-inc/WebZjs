@@ -34,6 +34,7 @@ use orchard::value::NoteValue as OrchardNoteValue;
 use orchard::Address as OrchardAddress;
 
 use pczt::roles::creator::Creator;
+use webzjs_common::Network;
 use zcash_keys::address::UnifiedAddress;
 use zcash_keys::encoding::AddressCodec;
 use zcash_keys::keys::{UnifiedFullViewingKey as InnerUfvk, UnifiedSpendingKey};
@@ -41,11 +42,10 @@ use zcash_primitives::transaction::builder::PcztParts;
 use zcash_primitives::transaction::TxVersion;
 use zcash_protocol::consensus::{BlockHeight, BranchId, NetworkConstants, Parameters};
 use zcash_protocol::value::Zatoshis;
-use webzjs_common::Network;
 
 use zcash_transparent::address::TransparentAddress;
-use zcash_transparent::bundle::{OutPoint, TxOut};
 use zcash_transparent::builder::TransparentBuilder;
+use zcash_transparent::bundle::{OutPoint, TxOut};
 use zcash_transparent::keys::{NonHardenedChildIndex, TransparentKeyScope};
 use zcash_transparent::pczt::Bip32Derivation;
 
@@ -155,7 +155,10 @@ fn build_transparent(
         .map_err(|e| Error::PcztDescribe(format!("derive t-pubkey: {e:?}")))?;
     let taddr = TransparentAddress::from_pubkey(&pk);
 
-    let coin = TxOut::new(Zatoshis::from_u64(SPEND_VALUE).unwrap(), taddr.script().into());
+    let coin = TxOut::new(
+        Zatoshis::from_u64(SPEND_VALUE).unwrap(),
+        taddr.script().into(),
+    );
     let mut builder = TransparentBuilder::empty();
     builder
         .add_p2pkh_input(pk, OutPoint::new([0u8; 32], 0), coin)
@@ -310,7 +313,11 @@ fn build_orchard(
         .clone();
     let mut rng = StdRng::seed_from_u64(0x0_C_5A_u64);
 
-    let note = make_orchard_note(&mut rng, fvk.address_at(0u32, OrchardScope::External), SPEND_VALUE);
+    let note = make_orchard_note(
+        &mut rng,
+        fvk.address_at(0u32, OrchardScope::External),
+        SPEND_VALUE,
+    );
     let cmx: ExtractedNoteCommitment = note.commitment().into();
     let sibling = MerkleHashOrchard::from_cmx(&cmx);
     let path = OrchardMerklePath::from_parts(0, [sibling; 32]);
@@ -347,7 +354,9 @@ fn build_orchard(
 fn make_orchard_note(rng: &mut StdRng, recipient: OrchardAddress, value: u64) -> OrchardNote {
     let mut rho_bytes = [0u8; 32];
     rho_bytes[0] = 7;
-    let rho = Rho::from_bytes(&rho_bytes).into_option().expect("valid rho");
+    let rho = Rho::from_bytes(&rho_bytes)
+        .into_option()
+        .expect("valid rho");
     loop {
         let mut rseed_bytes = [0u8; 32];
         rng.fill_bytes(&mut rseed_bytes);
@@ -388,9 +397,18 @@ mod tests {
         let attacker = ufvk_from_seed(&net, ATTACKER_SEED).unwrap();
 
         for (pool, demo) in [
-            ("transparent", transparent_demo(&net, &me, &bridge, &attacker).unwrap()),
-            ("sapling", sapling_demo(&net, &me, &bridge, &attacker).unwrap()),
-            ("orchard", orchard_demo(&net, &me, &bridge, &attacker).unwrap()),
+            (
+                "transparent",
+                transparent_demo(&net, &me, &bridge, &attacker).unwrap(),
+            ),
+            (
+                "sapling",
+                sapling_demo(&net, &me, &bridge, &attacker).unwrap(),
+            ),
+            (
+                "orchard",
+                orchard_demo(&net, &me, &bridge, &attacker).unwrap(),
+            ),
         ] {
             let honest = hex_to_pczt(&demo.honest);
             let spoof = hex_to_pczt(&demo.spoof);

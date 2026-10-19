@@ -7,6 +7,8 @@ import { useWebZjsContext } from 'src/context/WebzjsContext';
 import { BlockHeightCard } from 'src/components/BlockHeightCard/BlockHeightCard';
 import { useMetaMaskContext } from 'src/context/MetamaskContext';
 import { useWebZjsActions } from '../hooks/useWebzjsActions';
+import { useWalletStats } from '../hooks/useWalletStats';
+import WalletStatsCard from '../components/WalletStatsCard/WalletStatsCard';
 
 interface BalanceCard {
   name: string;
@@ -15,11 +17,21 @@ interface BalanceCard {
 }
 
 function AccountSummary() {
-  const { totalBalance, spendableBalance, unshieldedBalance, shieldedBalance, hasPending } = useBalance();
+  const {
+    totalBalance,
+    spendableBalance,
+    unshieldedBalance,
+    shieldedBalance,
+    saplingBalance,
+    orchardBalance,
+    ironwoodBalance,
+    hasPending,
+  } = useBalance();
   const { pendingTxs } = usePendingTransactions();
   const { state } = useWebZjsContext();
   const { snapState } = useMetaMaskContext();
   const { fullResync } = useWebZjsActions();
+  const { activity, loading: statsLoading } = useWalletStats();
 
   const BalanceCards: BalanceCard[] = [
     {
@@ -91,6 +103,18 @@ function AccountSummary() {
           ))}
         </div>
       )}
+      <WalletStatsCard
+        pools={{
+          transparent: unshieldedBalance,
+          sapling: saplingBalance,
+          orchard: orchardBalance,
+          ironwood: ironwoodBalance,
+        }}
+        activity={activity}
+        chainHeight={state.chainHeight !== undefined ? Number(state.chainHeight) : undefined}
+        syncedHeight={state.summary?.fully_scanned_height}
+        loading={statsLoading}
+      />
       <BlockHeightCard
         state={state}
         syncedFrom={snapState?.webWalletSyncStartBlock}

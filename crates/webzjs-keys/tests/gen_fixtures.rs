@@ -85,7 +85,9 @@ fn make_note_versioned(
     // A small canonical field element is a fine `rho` for an off-chain note.
     let mut rho_bytes = [0u8; 32];
     rho_bytes[0] = 7;
-    let rho = Rho::from_bytes(&rho_bytes).into_option().expect("valid rho");
+    let rho = Rho::from_bytes(&rho_bytes)
+        .into_option()
+        .expect("valid rho");
     loop {
         let mut rseed_bytes = [0u8; 32];
         rng.fill_bytes(&mut rseed_bytes);
@@ -138,7 +140,12 @@ fn make_orchard_pczt(
         .expect("add_spend");
     for (ovk, recipient, value) in outputs {
         builder
-            .add_output(ovk.clone(), *recipient, NoteValue::from_raw(*value), [0u8; 512])
+            .add_output(
+                ovk.clone(),
+                *recipient,
+                NoteValue::from_raw(*value),
+                [0u8; 512],
+            )
             .expect("add_output");
     }
 
@@ -188,7 +195,12 @@ fn make_ironwood_pczt(
         .expect("add_spend");
     for (ovk, recipient, value) in outputs {
         builder
-            .add_output(ovk.clone(), *recipient, NoteValue::from_raw(*value), [0u8; 512])
+            .add_output(
+                ovk.clone(),
+                *recipient,
+                NoteValue::from_raw(*value),
+                [0u8; 512],
+            )
             .expect("add_output");
     }
 
@@ -252,7 +264,12 @@ fn make_turnstile_migration_pczt(
     )
     .expect("ironwood Builder::new");
     iw_builder
-        .add_output(out_ovk, out_addr, NoteValue::from_raw(out_value), [0u8; 512])
+        .add_output(
+            out_ovk,
+            out_addr,
+            NoteValue::from_raw(out_value),
+            [0u8; 512],
+        )
         .expect("add_output");
     let (iw_bundle, _) = iw_builder
         .build_for_pczt(&mut *rng)
@@ -314,11 +331,16 @@ fn make_transparent_pczt(
     let (pk, taddr) = transparent_addr0(spend_seed);
 
     // The coin being spent: a P2PKH output paying our own address.
-    let coin = TxOut::new(Zatoshis::from_u64(spend_value).unwrap(), taddr.script().into());
+    let coin = TxOut::new(
+        Zatoshis::from_u64(spend_value).unwrap(),
+        taddr.script().into(),
+    );
     let utxo = OutPoint::new([0u8; 32], 0);
 
     let mut builder = TransparentBuilder::empty();
-    builder.add_p2pkh_input(pk, utxo, coin).expect("add p2pkh input");
+    builder
+        .add_p2pkh_input(pk, utxo, coin)
+        .expect("add p2pkh input");
     builder
         .add_output(recipient, Zatoshis::from_u64(out_value).unwrap())
         .expect("add transparent output");
@@ -391,12 +413,16 @@ fn make_sapling_pczt(
     rng: &mut StdRng,
     spend_dfvk: &sapling::zip32::DiversifiableFullViewingKey,
     spend_value: u64,
-    outputs: &[(sapling::keys::OutgoingViewingKey, sapling::PaymentAddress, u64)],
+    outputs: &[(
+        sapling::keys::OutgoingViewingKey,
+        sapling::PaymentAddress,
+        u64,
+    )],
 ) -> pczt::Pczt {
     let note = make_sapling_note(rng, spend_dfvk, spend_value);
     let node = sapling::Node::from_cmu(&note.cmu());
-    let path =
-        sapling::MerklePath::from_parts(vec![node; 32], 0u64.into()).expect("32-element merkle path");
+    let path = sapling::MerklePath::from_parts(vec![node; 32], 0u64.into())
+        .expect("32-element merkle path");
     let anchor = sapling::Anchor::from(path.root(node));
 
     let mut builder = sapling::builder::Builder::new(
@@ -435,7 +461,11 @@ fn make_sapling_pczt(
 }
 
 fn write_fixture(name: &str, pczt: &pczt::Pczt) {
-    let path = format!("{}/tests/fixtures/{}.pczt", env!("CARGO_MANIFEST_DIR"), name);
+    let path = format!(
+        "{}/tests/fixtures/{}.pczt",
+        env!("CARGO_MANIFEST_DIR"),
+        name
+    );
     let bytes = pczt.clone().serialize().expect("serialize pczt");
     std::fs::write(&path, bytes).unwrap_or_else(|e| panic!("write {path}: {e}"));
     eprintln!("wrote {path}");

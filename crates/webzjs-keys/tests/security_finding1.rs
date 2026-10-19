@@ -43,7 +43,11 @@ fn ufvk_for_seed(seed: &[u8; 32]) -> zcash_keys::keys::UnifiedFullViewingKey {
 }
 
 fn load_pczt(name: &str) -> pczt::Pczt {
-    let path = format!("{}/tests/fixtures/{}.pczt", env!("CARGO_MANIFEST_DIR"), name);
+    let path = format!(
+        "{}/tests/fixtures/{}.pczt",
+        env!("CARGO_MANIFEST_DIR"),
+        name
+    );
     let bytes = std::fs::read(&path).unwrap_or_else(|e| {
         panic!(
             "missing fixture {path}: {e}\n\
@@ -109,7 +113,9 @@ fn fvk_plant_does_not_bypass_foreign_input_detection() {
     // Fixed behaviour: the planted foreign spend is rejected as a foreign input.
     let err = pczt_validate_inner(Network::TestNetwork, poisoned.clone(), &our_ufvk)
         .expect_err("FVK-planted foreign input must be rejected");
-    println!("│  validate → REJECTED (attribution is nullifier-only, ignores the fvk label): {err}");
+    println!(
+        "│  validate → REJECTED (attribution is nullifier-only, ignores the fvk label): {err}"
+    );
     assert!(
         err.to_string().contains("not under this key"),
         "must be rejected specifically as a foreign input, got: {err}"
