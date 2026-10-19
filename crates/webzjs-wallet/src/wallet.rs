@@ -61,10 +61,12 @@ use zcash_protocol::value::Zatoshis;
 use zip32;
 use zip32::fingerprint::SeedFingerprint;
 
-/// Blocks fetched and scanned per batch. One `sync_step` scans exactly one batch, so this also
-/// bounds how long a step holds the wallet write lock and how much block data is cached at once.
-/// Smaller batches mean more round trips to lightwalletd but shorter CPU bursts and lower peak memory.
-const BATCH_SIZE: u32 = 2500;
+/// Blocks fetched and scanned per batch. One `sync_step` scans exactly one batch (after verifying
+/// the few lookahead blocks above the max scanned height), so this also bounds how long a step holds
+/// the wallet write lock and how much block data is cached at once. Each step also costs a chain tip
+/// refresh, a UTXO refresh and a tree state fetch, so batches much smaller than this spend more time
+/// on that overhead than on scanning.
+const BATCH_SIZE: u32 = 10000;
 
 /// Source of the per-process part of [`Wallet::instance_id`].
 static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
