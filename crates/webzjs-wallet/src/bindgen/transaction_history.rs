@@ -146,14 +146,60 @@ impl TransactionHistoryResponse {
 /// Internal struct to accumulate transaction data
 #[derive(Debug, Default)]
 struct TxAccumulator {
+    /// Value of notes received on external addresses (money that came in from outside).
     received_value: u64,
-    sent_value: u64,
+    /// Value of notes received as change (money that came back to us).
+    change_value: u64,
+    /// Value of our own notes that this transaction spent.
+    spent_value: u64,
+    /// Value recorded as paid to recipients outside the wallet.
+    external_sent_value: u64,
     fee: Option<u64>,
     memos: Vec<String>,
     pools: std::collections::HashSet<String>,
     block_height: Option<BlockHeight>,
     status: Option<TransactionStatus>,
     expiry_height: Option<BlockHeight>,
+}
+
+/// The pool a note lives in. NU6.3: an Orchard-family note carries a `ValuePool`
+/// distinguishing the Orchard pool from the Ironwood pool (both reuse the same
+/// `orchard::Note` shape).
+fn pool_name(note: &zcash_client_backend::wallet::Note) -> &'static str {
+    match note {
+        zcash_client_backend::wallet::Note::Sapling(_) => "sapling",
+        zcash_client_backend::wallet::Note::Orchard { pool, .. } => match pool {
+            orchard::ValuePool::Orchard => "orchard",
+            orchard::ValuePool::Ironwood => "ironwood",
+        },
+    }
+}
+
+/// Decides the direction of a transaction and the amount to show for it.
+///
+/// A transaction is outgoing if it spent any of our notes or recorded a payment to an outside
+/// recipient. The amount shown is what we recorded as paid; when no recipient was recorded (the
+/// transaction was built elsewhere, or by a wallet version that did not record the output) it is
+/// everything we spent that did not come back, which then includes the fee. Funds that only
+/// moved inside the wallet are shown as shielding. Anything else is a receipt.
+fn classify(acc: &TxAccumulator) -> (TransactionType, i64) {
+    let came_back = acc.received_value + acc.change_value;
+    if acc.spent_value > 0 || acc.external_sent_value > 0 {
+        let out = if acc.external_sent_value > 0 {
+            acc.external_sent_value
+        } else {
+            acc.spent_value.saturating_sub(came_back)
+        };
+        if out == 0 && came_back > 0 {
+            return (TransactionType::Shielded, came_back as i64);
+        }
+        return (TransactionType::Sent, -(out as i64));
+    }
+    if acc.change_value > 0 && acc.received_value == 0 {
+        // Change without any shielded spend: the inputs were our transparent funds.
+        return (TransactionType::Shielded, acc.change_value as i64);
+    }
+    (TransactionType::Received, came_back as i64)
 }
 
 /// Extract transaction history from the wallet database
@@ -178,20 +224,17 @@ pub fn extract_transaction_history(
         let txid = note.txid();
         let entry = tx_map.entry(txid).or_default();
 
-        // Add received value
-        entry.received_value += note.note().value().into_u64();
+        // Change comes back to an internally scoped address. The explicit flag is set when the
+        // wallet built the transaction; the scope covers notes that scanning found first.
+        let is_change =
+            note.is_change() || note.recipient_key_scope() == Some(zip32::Scope::Internal);
+        if is_change {
+            entry.change_value += note.note().value().into_u64();
+        } else {
+            entry.received_value += note.note().value().into_u64();
+        }
 
-        // Determine pool from note type. NU6.3: an Orchard-family note carries a
-        // `ValuePool` distinguishing the Orchard pool from the Ironwood pool (both
-        // reuse the same `orchard::Note` shape).
-        let pool = match note.note() {
-            zcash_client_backend::wallet::Note::Sapling(_) => "sapling",
-            zcash_client_backend::wallet::Note::Orchard { pool, .. } => match pool {
-                orchard::ValuePool::Orchard => "orchard",
-                orchard::ValuePool::Ironwood => "ironwood",
-            },
-        };
-        entry.pools.insert(pool.to_string());
+        entry.pools.insert(pool_name(note.note()).to_string());
 
         // Extract memo text
         if let zcash_protocol::memo::Memo::Text(text) = note.memo() {
@@ -209,6 +252,36 @@ pub fn extract_transaction_history(
         }
     }
 
+    // Process the spends of this account's notes. A transaction that spends our notes is
+    // outgoing even when the only outputs we can see are change, and even when it was built
+    // elsewhere with the same keys and left no sent records here.
+    let note_values: BTreeMap<_, _> = db
+        .received_notes()
+        .iter()
+        .filter(|note| note.account_id() == account_id_typed)
+        .map(|note| {
+            (
+                note.note_id(),
+                (note.note().value().into_u64(), pool_name(note.note())),
+            )
+        })
+        .collect();
+    for (note_id, spending_txid) in db.received_note_spends() {
+        let Some((value, pool)) = note_values.get(note_id) else {
+            continue;
+        };
+        let entry = tx_map.entry(*spending_txid).or_default();
+        entry.spent_value += value;
+        entry.pools.insert(pool.to_string());
+        if entry.status.is_none() {
+            if let Some(tx_entry) = db.tx_table().get(spending_txid) {
+                entry.status = Some(tx_entry.status());
+                entry.block_height = tx_entry.mined_height();
+                entry.expiry_height = tx_entry.expiry_height();
+            }
+        }
+    }
+
     // Process sent notes for this account
     for (sent_note_id, sent_note) in db.sent_notes().iter() {
         if sent_note.from_account_id() != account_id_typed {
@@ -218,8 +291,15 @@ pub fn extract_transaction_history(
         let txid = *sent_note_id.txid();
         let entry = tx_map.entry(txid).or_default();
 
-        // Add sent value
-        entry.sent_value += sent_note.value().into_u64();
+        // Only payments to recipients outside the wallet count as sent. Internal recipients
+        // (change, shielding) are already counted through the received notes they create.
+        if matches!(
+            sent_note.to(),
+            zcash_client_backend::wallet::Recipient::External { .. }
+                | zcash_client_backend::wallet::Recipient::EphemeralTransparent { .. }
+        ) {
+            entry.external_sent_value += sent_note.value().into_u64();
+        }
 
         // Determine pool from recipient
         let pool = match sent_note.to() {
@@ -274,20 +354,7 @@ pub fn extract_transaction_history(
     let mut transactions: Vec<TransactionHistoryEntry> = tx_map
         .into_iter()
         .map(|(txid, acc)| {
-            let net_value = acc.received_value as i64 - acc.sent_value as i64;
-
-            // Determine transaction type
-            let tx_type = if net_value > 0 {
-                TransactionType::Received
-            } else if net_value < 0 {
-                TransactionType::Sent
-            } else if acc.received_value > 0 && acc.sent_value > 0 {
-                // Net zero but both received and sent - internal transfer
-                TransactionType::Shielded
-            } else {
-                // Default to received if we can't determine
-                TransactionType::Received
-            };
+            let (tx_type, value) = classify(&acc);
 
             // Determine pool type
             let pool = if acc.pools.len() > 1 {
@@ -342,10 +409,7 @@ pub fn extract_transaction_history(
             TransactionHistoryEntry {
                 txid: hex::encode(txid.as_ref()),
                 tx_type,
-                value: match tx_type {
-                    TransactionType::Shielded => acc.received_value as i64,
-                    _ => net_value,
-                },
+                value,
                 fee: acc.fee,
                 block_height: block_height_u32,
                 confirmations,
