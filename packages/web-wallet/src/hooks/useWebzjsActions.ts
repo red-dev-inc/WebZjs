@@ -668,7 +668,9 @@ export function useWebZjsActions(): WebzjsActions {
               fullyScanned: scannedHeight,
               chainTip: Number.isFinite(chainTip) ? chainTip : null,
             });
-            console.info(`Full resync: checkpointed after ${steps} steps at ${scannedHeight} / ${chainTip}`);
+            console.info(
+              `Full resync: checkpointed after ${steps} steps at ${scannedHeight} / ${chainTip} (${bytes.length} bytes)`,
+            );
           }
           if (!more) break;
         }

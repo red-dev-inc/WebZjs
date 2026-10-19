@@ -217,6 +217,46 @@ describe('two tabs sharing one storage', () => {
   });
 });
 
+describe('a record that cannot be stored', () => {
+  // Structured cloning rejects functions with a DataCloneError, the same error class the browser
+  // raises when the renderer is out of memory. `put` throws it synchronously inside the request
+  // callback, where an uncaught exception would leave the write promise pending forever.
+  const uncloneable = { toJSON() {} } as unknown as Uint8Array;
+
+  it('saveWallet rejects and leaves the stored wallet as it was', async () => {
+    const store = await freshStore();
+    const wallet = {};
+    store.registerWallet(wallet, { epoch: null, birthday: null });
+    await store.saveWallet(wallet, bytesOf('v1'), { reason: 'sync' });
+
+    await expect(store.saveWallet(wallet, uncloneable, { reason: 'sync' })).rejects.toMatchObject({
+      name: 'DataCloneError',
+    });
+
+    const record = (await stored('wallet')) as { bytes: Uint8Array; meta: { epoch: number } };
+    expect(new TextDecoder().decode(record.bytes)).toBe('v1');
+    expect(record.meta.epoch).toBe(1);
+    expect(store.walletOrigin(wallet)).toMatchObject({ epoch: 1 });
+    // The instance can still save afterwards.
+    await store.saveWallet(wallet, bytesOf('v2'), { reason: 'sync' });
+    expect(await store.peekStoredEpoch()).toBe(2);
+  });
+
+  it('stageWallet rejects and leaves the previous checkpoint in place', async () => {
+    const store = await freshStore();
+    const fresh = {};
+    await store.stageWallet(fresh, bytesOf('partial'), { birthday: 1, fullyScanned: 2, chainTip: 3 });
+
+    await expect(
+      store.stageWallet(fresh, uncloneable, { birthday: 1, fullyScanned: 4, chainTip: 5 }),
+    ).rejects.toMatchObject({ name: 'DataCloneError' });
+
+    const staged = (await store.readStaging())!;
+    expect(new TextDecoder().decode(staged.bytes)).toBe('partial');
+    expect(staged.meta.fullyScanned).toBe(2);
+  });
+});
+
 describe('resync checkpoints', () => {
   const stagedMeta = { birthday: 2_600_000, fullyScanned: 2_700_000, chainTip: 3_500_000 };
 

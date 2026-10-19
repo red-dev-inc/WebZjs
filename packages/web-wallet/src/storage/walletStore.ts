@@ -165,6 +165,18 @@ function toHeight(value: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** Rejects with `error` after aborting `transaction`, so nothing queued on it is committed. */
+function failWith(transaction: IDBTransaction, reject: (error: unknown) => void): (error: unknown) => void {
+  return (error: unknown) => {
+    try {
+      transaction.abort();
+    } catch {
+      // Already aborted or finished.
+    }
+    reject(error);
+  };
+}
+
 // Saves from one tab run one at a time so two saves of the same instance cannot race each
 // other's registry update.
 let writes: Promise<unknown> = Promise.resolve();
@@ -255,30 +267,37 @@ export function saveWallet(wallet: object, bytes: Uint8Array, opts: SaveOptions)
       'readwrite',
       (objectStore) =>
         new Promise<WalletMeta>((resolve, reject) => {
+          const fail = failWith(objectStore.transaction, reject);
           const request = objectStore.get(WALLET_KEY);
-          request.onerror = () => reject(request.error);
+          request.onerror = () => fail(request.error);
           request.onsuccess = () => {
-            const storedEpoch = epochOf(request.result);
-            if (!opts.force && storedEpoch !== expected) {
-              objectStore.transaction.abort();
-              reject(new StaleWalletError(expected, storedEpoch));
-              return;
+            try {
+              const storedEpoch = epochOf(request.result);
+              if (!opts.force && storedEpoch !== expected) {
+                fail(new StaleWalletError(expected, storedEpoch));
+                return;
+              }
+              const next: WalletMeta = {
+                epoch: (storedEpoch ?? 0) + 1,
+                birthday,
+                fullyScanned: opts.fullyScanned ?? null,
+                savedAt: Date.now(),
+                writerId: TAB_ID,
+                reason: opts.reason,
+              };
+              const record: WalletRecord = { v: 2, bytes, meta: next };
+              objectStore.put(record, WALLET_KEY);
+              objectStore.put(next, META_KEY);
+              if (birthday !== null) {
+                objectStore.put(String(birthday), BIRTHDAY_KEY);
+              }
+              resolve(promisifyRequest(objectStore.transaction).then(() => next));
+            } catch (error) {
+              // `put` throws synchronously when the record cannot be cloned (for example
+              // `DataCloneError` when the renderer is out of memory). Reject instead of letting
+              // the exception escape the event handler, which would leave this promise pending.
+              fail(error);
             }
-            const next: WalletMeta = {
-              epoch: (storedEpoch ?? 0) + 1,
-              birthday,
-              fullyScanned: opts.fullyScanned ?? null,
-              savedAt: Date.now(),
-              writerId: TAB_ID,
-              reason: opts.reason,
-            };
-            const record: WalletRecord = { v: 2, bytes, meta: next };
-            objectStore.put(record, WALLET_KEY);
-            objectStore.put(next, META_KEY);
-            if (birthday !== null) {
-              objectStore.put(String(birthday), BIRTHDAY_KEY);
-            }
-            resolve(promisifyRequest(objectStore.transaction).then(() => next));
           };
         }),
     );
@@ -314,21 +333,27 @@ export function stageWallet(wallet: object, bytes: Uint8Array, opts: StageOption
       'readwrite',
       (objectStore) =>
         new Promise<StagedWalletMeta>((resolve, reject) => {
+          const fail = failWith(objectStore.transaction, reject);
           const request = objectStore.get(WALLET_KEY);
-          request.onerror = () => reject(request.error);
+          request.onerror = () => fail(request.error);
           request.onsuccess = () => {
-            const meta: StagedWalletMeta = {
-              epoch: (epochOf(request.result) ?? 0) + 1,
-              birthday,
-              fullyScanned: opts.fullyScanned,
-              chainTip: opts.chainTip,
-              savedAt: Date.now(),
-              writerId: TAB_ID,
-              reason: 'resync',
-            };
-            const record: StagedWalletRecord = { v: 2, bytes, meta };
-            objectStore.put(record, STAGING_KEY);
-            resolve(promisifyRequest(objectStore.transaction).then(() => meta));
+            try {
+              const meta: StagedWalletMeta = {
+                epoch: (epochOf(request.result) ?? 0) + 1,
+                birthday,
+                fullyScanned: opts.fullyScanned,
+                chainTip: opts.chainTip,
+                savedAt: Date.now(),
+                writerId: TAB_ID,
+                reason: 'resync',
+              };
+              const record: StagedWalletRecord = { v: 2, bytes, meta };
+              objectStore.put(record, STAGING_KEY);
+              resolve(promisifyRequest(objectStore.transaction).then(() => meta));
+            } catch (error) {
+              // See saveWallet: a throwing `put` must reject, not hang the checkpoint.
+              fail(error);
+            }
           };
         }),
     );
@@ -366,14 +391,7 @@ export function promoteStaging(wallet: object): Promise<WalletMeta> {
       (objectStore) =>
         new Promise<WalletMeta>((resolve, reject) => {
           const transaction = objectStore.transaction;
-          const fail = (error: unknown) => {
-            try {
-              transaction.abort();
-            } catch {
-              // Already aborted or finished.
-            }
-            reject(error);
-          };
+          const fail = failWith(transaction, reject);
           const stagedRequest = objectStore.get(STAGING_KEY);
           stagedRequest.onerror = () => fail(stagedRequest.error);
           stagedRequest.onsuccess = () => {
