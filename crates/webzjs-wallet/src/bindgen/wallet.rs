@@ -1,7 +1,9 @@
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{mpsc, oneshot};
 use wasm_bindgen::prelude::*;
 
 use tonic_web_wasm_client::Client;
@@ -28,6 +30,41 @@ use zcash_primitives::transaction::TxId;
 pub type MemoryWallet<T> = Wallet<MemoryWalletDb<Network>, T>;
 pub type AccountId = <MemoryWalletDb<Network> as WalletRead>::AccountId;
 pub type NoteRef = <MemoryWalletDb<Network> as InputSource>::NoteRef;
+
+/// One `WebWallet::sync` call, handed to the sync worker.
+struct SyncRequest {
+    wallet: MemoryWallet<Client>,
+    /// The sync result. The error is a `String` because `Error` holds a `JsValue` and is not `Send`.
+    reply: oneshot::Sender<Result<(), String>>,
+}
+
+/// The single web worker that runs every `WebWallet::sync` call, spawned on first use.
+///
+/// Each call used to spawn its own worker. Those workers are never torn down: `wasm_thread` is built
+/// with `keep_worker_alive`, and a worker's thread-locals are not dropped even when it is closed.
+/// The tracing registry gives each thread that creates a span one of only 128 slots on wasm32 and
+/// relies on the thread-local drop to hand it back, so the periodic rescan exhausted the slots after
+/// about 128 syncs (around 75 minutes at the default interval) and the next sync panicked with
+/// "Thread count overflowed the configured max count". Reusing one worker keeps the thread count,
+/// and the memory held by idle workers, constant. Requests run one at a time, in order.
+fn sync_worker() -> &'static mpsc::UnboundedSender<SyncRequest> {
+    static WORKER: OnceLock<mpsc::UnboundedSender<SyncRequest>> = OnceLock::new();
+    WORKER.get_or_init(|| {
+        let (tx, mut rx) = mpsc::unbounded_channel::<SyncRequest>();
+        thread::Builder::new()
+            .name("sync".to_string())
+            .spawn_async(move || async move {
+                assert!(thread::is_web_worker_thread());
+                while let Some(SyncRequest { wallet, reply }) = rx.recv().await {
+                    let result = wallet.sync().await.map_err(|e| e.to_string());
+                    // The caller only goes away if its future was dropped; nothing to do then.
+                    let _ = reply.send(result);
+                }
+            })
+            .unwrap_throw();
+        tx
+    })
+}
 
 /// # A Zcash wallet
 ///
@@ -268,40 +305,34 @@ impl WebWallet {
     ///
     /// Start a background sync task which will fetch and scan blocks from the connected lighwalletd server
     ///
-    /// IMPORTANT: This will spawn a new webworker which will handle the sync task. The sync task will continue to run in the background until the sync process is complete.
+    /// IMPORTANT: The sync runs on a dedicated webworker that is shared by every wallet and reused for every call,
+    /// so concurrent calls run one after another. The sync task will continue to run in the background until the sync process is complete.
     /// During this time the main thread will not block but certain wallet methods may temporarily block while the wallet is being written to during the sync.
+    ///
+    /// A trap inside the worker (a Rust panic compiled to wasm) is not recovered from: the worker stops
+    /// taking requests, the trapped call never resolves and later calls wait behind it until the page is
+    /// reloaded. The channel errors handled below only cover a worker that has shut down cleanly, which
+    /// nothing does today; they are kept so that a future supervisor can make them meaningful.
     ///
     pub async fn sync(&self) -> Result<(), Error> {
         assert!(!thread::is_web_worker_thread());
 
-        let db = self.inner.clone();
-
-        let sync_handler = thread::Builder::new()
-            .name("sync".to_string())
-            .spawn_async(|| async {
-                assert!(thread::is_web_worker_thread());
-                tracing::debug!(
-                    "Current num threads (wasm_thread) {}",
-                    rayon::current_num_threads()
-                );
-
-                let db = db;
-                // Convert error to String since Error isn't Send (contains JsValue)
-                db.sync().await.map_err(|e| e.to_string())
+        let (reply, result) = oneshot::channel();
+        sync_worker()
+            .send(SyncRequest {
+                wallet: self.inner.clone(),
+                reply,
             })
-            .unwrap_throw()
-            .join_async();
+            .map_err(|_| Error::Sync("Sync worker has stopped".to_string()))?;
 
-        // sync_handler.await returns Result<Result<(), String>, Box<dyn Any + Send>>
-        // The outer Result is for the join (thread panics), inner is sync result
-        match sync_handler.await {
+        match result.await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err_string)) => {
                 tracing::warn!("Sync error (will be retried by caller): {}", err_string);
                 Err(Error::Sync(err_string))
             }
-            Err(panic_error) => {
-                let msg = format!("Sync thread panicked: {:?}", panic_error);
+            Err(_) => {
+                let msg = "Sync worker dropped the request without replying".to_string();
                 tracing::error!("{}", msg);
                 Err(Error::Sync(msg))
             }
