@@ -26,12 +26,12 @@ use std::sync::Arc;
 use subtle::ConditionallySelectable;
 use tokio::sync::RwLock;
 use zcash_address::ZcashAddress;
+use zcash_client_backend::data_api::wallet::input_selection::SpendPolicy;
 use zcash_client_backend::data_api::wallet::{
     create_pczt_from_proposal, create_proposed_transactions,
     extract_and_store_transaction_from_pczt, input_selection::GreedyInputSelector,
     propose_shielding, propose_transfer, ConfirmationsPolicy, SpendingKeys,
 };
-use zcash_client_backend::data_api::wallet::input_selection::SpendPolicy;
 use zcash_client_backend::data_api::CoinbaseFilter;
 use zcash_client_backend::data_api::{
     Account, AccountBirthday, AccountPurpose, InputSource, WalletRead, WalletSummary, WalletWrite,
@@ -559,7 +559,7 @@ where
         )
         .map_err(|e| {
             tracing::error!("pczt_shield: propose_shielding failed: {:?}", e);
-            Error::Generic(format!("Error when shielding: {:?}", e))
+            Error::Generic(format!("Error when shielding: {e:?}"))
         })?;
         tracing::info!("pczt_shield: proposal created successfully");
 
@@ -584,7 +584,7 @@ where
         )
         .map_err(|e| {
             tracing::error!("pczt_shield: create_pczt_from_proposal failed: {:?}", e);
-            Error::PcztCreate(format!("{:?}", e))
+            Error::PcztCreate(format!("{e:?}"))
         })?;
         tracing::info!("pczt_shield: PCZT created from proposal successfully");
 
@@ -658,7 +658,7 @@ where
             &SpendPolicy::default(),
             None,
         )
-            .map_err(|e| Error::Generic(format!("something bad happened when calling propose transfer. Possibly insufficient balance... {:?}", e)))?;
+            .map_err(|e| Error::Generic(format!("something bad happened when calling propose transfer. Possibly insufficient balance... {e:?}")))?;
         tracing::info!("PCZT proposal created");
         let pczt = create_pczt_from_proposal::<
             _,
@@ -680,7 +680,7 @@ where
         )
         .map_err(|e| {
             tracing::error!("pczt_create: create_pczt_from_proposal failed: {:?}", e);
-            Error::PcztCreate(format!("{:?}", e))
+            Error::PcztCreate(format!("{e:?}"))
         })?;
         Ok(pczt)
     }
@@ -726,10 +726,7 @@ where
                     Ok(())
                 })
                 .map_err(|e| {
-                    Error::PcztProve(format!(
-                        "Failed to add Sapling proof generation key: {:?}",
-                        e
-                    ))
+                    Error::PcztProve(format!("Failed to add Sapling proof generation key: {e:?}"))
                 })?
                 .finish()
         } else {
@@ -741,18 +738,20 @@ where
         // Nu6_3 -> PostNu6_3 (the Ironwood-era circuit that enforces the disableCrossAddress
         // constraint sealing the Orchard pool); everything current (Nu6_2) -> FixedPostNu6_2.
         // The same version must build the verifying key when extracting the transaction below.
-        let orchard_circuit_version =
-            match BranchId::try_from(*pczt.global().consensus_branch_id()) {
-                Ok(BranchId::Nu6_3) => orchard::circuit::OrchardCircuitVersion::PostNu6_3,
-                _ => orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2,
-            };
+        let orchard_circuit_version = match BranchId::try_from(*pczt.global().consensus_branch_id())
+        {
+            Ok(BranchId::Nu6_3) => orchard::circuit::OrchardCircuitVersion::PostNu6_3,
+            _ => orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2,
+        };
 
         let prover = LocalTxProver::bundled();
         let pczt = Prover::new(pczt)
-            .create_orchard_proof(&orchard::circuit::ProvingKey::build(orchard_circuit_version))
-            .map_err(|e| Error::PcztProve(format!("Failed to create Orchard proof: {:?}", e)))?
+            .create_orchard_proof(&orchard::circuit::ProvingKey::build(
+                orchard_circuit_version,
+            ))
+            .map_err(|e| Error::PcztProve(format!("Failed to create Orchard proof: {e:?}")))?
             .create_sapling_proofs(&prover, &prover)
-            .map_err(|e| Error::PcztProve(format!("Failed to create Sapling proofs: {:?}", e)))?
+            .map_err(|e| Error::PcztProve(format!("Failed to create Sapling proofs: {e:?}")))?
             .finish();
         Ok(pczt)
     }
@@ -784,8 +783,7 @@ where
                     blocks_behind
                 );
                 return Err(Error::Generic(format!(
-                    "Wallet is {} blocks behind the chain tip. Please sync before sending (max allowed: 100 blocks).",
-                    blocks_behind
+                    "Wallet is {blocks_behind} blocks behind the chain tip. Please sync before sending (max allowed: 100 blocks)."
                 )));
             }
             tracing::info!(
@@ -801,11 +799,11 @@ where
         // Build the Orchard verifying key with the circuit version for this PCZT's target
         // branch (Nu6_3 -> PostNu6_3, else FixedPostNu6_2), matching how the proof was
         // created. See the proving-key derivation in the pczt_prove path.
-        let orchard_circuit_version =
-            match BranchId::try_from(*pczt.global().consensus_branch_id()) {
-                Ok(BranchId::Nu6_3) => orchard::circuit::OrchardCircuitVersion::PostNu6_3,
-                _ => orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2,
-            };
+        let orchard_circuit_version = match BranchId::try_from(*pczt.global().consensus_branch_id())
+        {
+            Ok(BranchId::Nu6_3) => orchard::circuit::OrchardCircuitVersion::PostNu6_3,
+            _ => orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2,
+        };
         let prover = LocalTxProver::bundled();
         let (spend_vk, output_vk) = prover.verifying_keys();
         let mut db = self.db.write().await;
@@ -813,12 +811,13 @@ where
             &mut *db,
             pczt,
             Some((&spend_vk, &output_vk)),
-            Some(&orchard::circuit::VerifyingKey::build(orchard_circuit_version)),
+            Some(&orchard::circuit::VerifyingKey::build(
+                orchard_circuit_version,
+            )),
         )
         .map_err(|e| {
             Error::PcztSend(format!(
-                "Failed to extract and store transaction from PCZT: {:?}",
-                e
+                "Failed to extract and store transaction from PCZT: {e:?}"
             ))
         })?;
         drop(db);
@@ -829,7 +828,7 @@ where
     pub fn pczt_combine(&self, pczts: Vec<Pczt>) -> Result<Pczt, Error> {
         Combiner::new(pczts)
             .combine()
-            .map_err(|e| Error::PcztCombine(format!("Failed to combine PCZT: {:?}", e)))
+            .map_err(|e| Error::PcztCombine(format!("Failed to combine PCZT: {e:?}")))
     }
 }
 
