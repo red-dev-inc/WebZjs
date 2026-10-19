@@ -5,6 +5,7 @@ import { zecToZats } from '../utils';
 import { useWebZjsActions } from './useWebzjsActions';
 import { useState } from 'react';
 import { SignPcztDetails } from '../types/snap';
+import { BROADCAST_STAGE, describeTransferError, TransferFlow } from '../utils/describeError';
 
 interface IUsePczt {
   handlePcztTransaction: (
@@ -121,20 +122,27 @@ export const usePczt = (): IUsePczt => {
       toAddress: string,
       value: string,
     ) => Promise<Pczt>,
+    flow: TransferFlow = 'transfer',
   ) => {
     if (!state.webWallet) return;
     setLastError(null); // Clear any previous error
     console.info('Shield: Starting transaction flow');
+    // Which step was running when something threw, for the error message.
+    let stage = 'Preparing the transaction';
+    // Set once the network has the transaction; a later failure must not say nothing was sent.
+    let broadcast = false;
     try {
       // Rust's pczt_shield/pczt_send handle sync validation internally
       // (checks if behind and syncs if needed), so no JS-layer pre-check required
       setPcztTransferStatus(PcztTransferStatus.CREATING_PCZT);
+      stage = 'Building the transaction';
       console.info('Shield: Creating PCZT for account', accountId);
       const pczt = await createPcztFunc(accountId, toAddress, value);
       const pcztBytes = pczt.serialize();
       console.info('Shield: PCZT created, size:', pcztBytes.length, 'bytes');
 
       setPcztTransferStatus(PcztTransferStatus.SIGNING_PCZT);
+      stage = 'Signing in MetaMask';
       console.info('Shield: Sending to snap for signing');
       const pcztHexStringSigned = await signPczt(pczt, {
         recipient: toAddress,
@@ -142,20 +150,25 @@ export const usePczt = (): IUsePczt => {
       });
       const pcztBufferSigned = Buffer.from(pcztHexStringSigned, 'hex');
       console.info('Shield: Signed PCZT received, size:', pcztBufferSigned.length, 'bytes');
+      stage = 'Reading the signed transaction';
       const signedPczt = Pczt.from_bytes(new Uint8Array(pcztBufferSigned));
       console.info('Shield: Signed PCZT parsed successfully');
 
       setPcztTransferStatus(PcztTransferStatus.PROVING_PCZT);
+      stage = 'Generating the proof';
       console.info('Shield: Starting proof generation');
       const provedPczt = await provePczt(signedPczt);
       console.info('Shield: Proof generated successfully');
 
       setPcztTransferStatus(PcztTransferStatus.SENDING_PCZT);
+      stage = BROADCAST_STAGE;
       console.info('Shield: Broadcasting transaction');
       await sendPczt(provedPczt);
+      broadcast = true;
       console.info('Shield: Transaction broadcast complete');
 
       // Persist wallet state immediately after broadcast to prevent data loss on crash
+      stage = 'Saving the wallet after broadcast';
       await flushDbToStore();
       console.info('Shield: Wallet state persisted');
 
@@ -178,19 +191,22 @@ export const usePczt = (): IUsePczt => {
       // Auto-sync interval handles catching up with new blocks.
       await syncStateWithWallet();
     } catch (error) {
-      const rawMessage = error instanceof Error ? error.message : String(error);
+      const { summary, detail } = describeTransferError(error, stage, flow, broadcast);
+      const rawMessage = detail;
 
       // Log full error details for debugging
       console.error('=== Transaction Error Details ===');
+      console.error('Stage:', stage);
       console.error('Raw error:', error);
       console.error('Error message:', rawMessage);
       console.error('Error type:', error instanceof Error ? error.constructor.name : typeof error);
-      if (error instanceof Error && error.stack) {
-        console.error('Stack trace:', error.stack);
+      const stack = (error as { stack?: unknown } | null)?.stack;
+      if (typeof stack === 'string') {
+        console.error('Stack trace:', stack);
       }
       console.error('================================');
 
-      let errorMessage = rawMessage;
+      let errorMessage = `${summary} Details: ${detail}`;
 
       // Parse InsufficientFunds error to extract amounts
       if (rawMessage.includes('InsufficientFunds')) {
@@ -239,6 +255,7 @@ export const usePczt = (): IUsePczt => {
         console.info('Shield: pczt_shield returned successfully');
         return pczt;
       },
+      'shield',
     );
   };
 
