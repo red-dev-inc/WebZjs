@@ -33,8 +33,8 @@ impl TransactionRequest {
         // BTreeMap automatically stores keys in sorted order so we can do this
         self.0
             .payments()
-            .iter()
-            .map(|(_index, p)| PaymentRequest(p.clone()))
+            .values()
+            .map(|p| PaymentRequest(p.clone()))
             .collect()
     }
 

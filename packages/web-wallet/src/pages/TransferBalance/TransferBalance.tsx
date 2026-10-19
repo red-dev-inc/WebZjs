@@ -11,6 +11,7 @@ function TransferBalance(): React.JSX.Element {
   const {
     currentStep,
     formData,
+    prefilledRecipient,
     pcztTransferStatus,
     lastError,
     nextStep,
@@ -44,6 +45,7 @@ function TransferBalance(): React.JSX.Element {
       {currentStep === TransferStep.INPUT && (
         <TransferInput
           formData={formData}
+          prefilledRecipient={prefilledRecipient}
           nextStep={nextStep}
           handleChange={handleChange}
         />
