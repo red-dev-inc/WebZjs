@@ -160,7 +160,11 @@ fn narrate_describe(summary: &PcztSummary) {
             short(o.recipient.as_deref()),
             if o.verified { "verified" } else { "UNVERIFIED" },
             if o.is_change { ", change" } else { "" },
-            if o.is_ours && !o.is_change { ", self" } else { "" },
+            if o.is_ours && !o.is_change {
+                ", self"
+            } else {
+                ""
+            },
         ));
     }
     if let Some(m) = &summary.migration {
@@ -177,7 +181,9 @@ fn narrate_describe(summary: &PcztSummary) {
 fn narrate_validate<E: std::fmt::Display>(result: &Result<(), E>) {
     match result {
         Ok(()) => line("validate → Ok  (Layer B would allow signing)"),
-        Err(e) => line(&format!("validate → REJECTED  (Layer B refuses to sign): {e}")),
+        Err(e) => line(&format!(
+            "validate → REJECTED  (Layer B refuses to sign): {e}"
+        )),
     }
 }
 
@@ -190,7 +196,9 @@ fn honest_pczt_is_accepted() {
     );
     let ufvk = our_ufvk();
     let pczt = load_pczt("honest_bridge_deposit");
-    line("fixture: honest_bridge_deposit.pczt (spend 100k ours → bridge 50k + change 40k, fee 10k)");
+    line(
+        "fixture: honest_bridge_deposit.pczt (spend 100k ours → bridge 50k + change 40k, fee 10k)",
+    );
 
     let result = pczt_validate_inner(Network::from_str("test").unwrap(), pczt, &ufvk);
     narrate_validate(&result);
@@ -221,7 +229,10 @@ fn spoofed_recipient_is_surfaced() {
     let summary = pczt_describe_inner(Network::from_str("test").unwrap(), pczt.clone(), &ufvk)
         .expect("describe must succeed and surface the real outputs");
     narrate_describe(&summary);
-    line(&format!("expected true payee (attacker) = {}", short(Some(&attacker_addr()))));
+    line(&format!(
+        "expected true payee (attacker) = {}",
+        short(Some(&attacker_addr()))
+    ));
 
     assert!(
         summary
@@ -318,7 +329,11 @@ fn ironwood_payment_is_described_and_accepted() {
         .expect("describe must succeed on an Ironwood PCZT");
     narrate_describe(&summary);
 
-    let ironwood_outs: Vec<_> = summary.outputs.iter().filter(|o| o.pool == "ironwood").collect();
+    let ironwood_outs: Vec<_> = summary
+        .outputs
+        .iter()
+        .filter(|o| o.pool == "ironwood")
+        .collect();
     assert_eq!(
         ironwood_outs.len(),
         1,
@@ -383,7 +398,10 @@ fn self_migration_is_recognized() {
         .migration
         .as_ref()
         .expect("an Ironwood-output PCZT must be recognised as a migration");
-    assert_eq!(migration.amount, 90_000, "migrated amount = Ironwood output value");
+    assert_eq!(
+        migration.amount, 90_000,
+        "migrated amount = Ironwood output value"
+    );
     assert!(
         migration.to_self,
         "migrating to our own address must be flagged as a self-migration"
@@ -424,11 +442,18 @@ fn turnstile_migration_end_to_end() {
     // Value crosses the turnstile: 100_000 spent from Orchard, 90_000 into Ironwood,
     // 10_000 fee. This IS the turnstile value identity the validator checks.
     assert_eq!(summary.total_in, 100_000, "the Orchard spend is our input");
-    assert_eq!(summary.total_out, 90_000, "the Ironwood output is the migrated value");
+    assert_eq!(
+        summary.total_out, 90_000,
+        "the Ironwood output is the migrated value"
+    );
     assert_eq!(summary.fee, 10_000, "fee = Orchard out − Ironwood in");
 
     // Exactly one displayed output: the Ironwood note, to us, commitment-bound.
-    assert_eq!(summary.outputs.len(), 1, "only the Ironwood output is displayed");
+    assert_eq!(
+        summary.outputs.len(),
+        1,
+        "only the Ironwood output is displayed"
+    );
     let out = &summary.outputs[0];
     assert_eq!(out.pool, "ironwood");
     assert!(out.is_ours, "the migration output pays our own address");
@@ -440,8 +465,14 @@ fn turnstile_migration_end_to_end() {
         .as_ref()
         .expect("a cross-pool Orchard→Ironwood tx must be recognised as a migration");
     assert_eq!(m.amount, 90_000);
-    assert!(m.to_self, "migrating to our own address is a self-migration");
-    assert!(m.is_clean_path_a, "one Ironwood output, no third-party outputs");
+    assert!(
+        m.to_self,
+        "migrating to our own address is a self-migration"
+    );
+    assert!(
+        m.is_clean_path_a,
+        "one Ironwood output, no third-party outputs"
+    );
 
     // Layer B accepts the turnstile: spends ours, balances, verified, fee in band.
     let result = pczt_validate_inner(Network::from_str("test").unwrap(), pczt, &ufvk);
@@ -484,7 +515,10 @@ fn transparent_input_under_our_key_is_accepted() {
     let summary = pczt_describe_inner(Network::from_str("test").unwrap(), pczt.clone(), &ufvk)
         .expect("describe must succeed on a transparent PCZT");
     narrate_describe(&summary);
-    line(&format!("expected bridge t-address = {}", short(Some(&bridge_taddr()))));
+    line(&format!(
+        "expected bridge t-address = {}",
+        short(Some(&bridge_taddr()))
+    ));
     assert!(
         summary
             .outputs
@@ -538,7 +572,11 @@ fn sapling_change_is_detected() {
     let summary = pczt_describe_inner(Network::from_str("test").unwrap(), pczt.clone(), &ufvk)
         .expect("describe must succeed on a Sapling PCZT");
     narrate_describe(&summary);
-    let sapling_outs: Vec<_> = summary.outputs.iter().filter(|o| o.pool == "sapling").collect();
+    let sapling_outs: Vec<_> = summary
+        .outputs
+        .iter()
+        .filter(|o| o.pool == "sapling")
+        .collect();
     assert_eq!(
         sapling_outs.len(),
         2,
@@ -560,4 +598,3 @@ fn sapling_change_is_detected() {
     );
     verdict("change (internal scope) is told apart from the external payment; ACCEPTED");
 }
-
