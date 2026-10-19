@@ -38,7 +38,7 @@ zcash_keys = { version = "0.15.0", features = ["transparent-inputs", "orchard", 
 zcash_client_backend = { version = "0.24.0-rc.1", default-features = false, features = ["sync", "lightwalletd-tonic", "orchard"] }
 # sqhell fork of red-dev-inc "feat/snap-nu63" with the eager block-cache delete, nullifier-map pruning
 # and Ironwood (NU6.3) pool support. Switch back to red-dev-inc once those land there.
-zcash_client_memory = { git = "https://github.com/sqhell/zcash_client_memory", rev = "d6f7765640cf733ff611fb01c82c5749061088f8", features = ["orchard", "transparent-inputs"] }
+zcash_client_memory = { git = "https://github.com/sqhell/zcash_client_memory", rev = "e15c962dd84f59b27c06f41a52d89366846dc7be", features = ["orchard", "transparent-inputs"] }
 zcash_primitives = { version = "0.29.0" }
 zcash_transparent = { version = "0.9.0", default-features = false }
 zcash_address = { version = "0.13.0" }

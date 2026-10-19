@@ -3696,7 +3696,7 @@ dependencies = [
 [[package]]
 name = "zcash_client_memory"
 version = "0.0.0"
-source = "git+https://github.com/sqhell/zcash_client_memory?rev=d6f7765640cf733ff611fb01c82c5749061088f8#d6f7765640cf733ff611fb01c82c5749061088f8"
+source = "git+https://github.com/sqhell/zcash_client_memory?rev=e15c962dd84f59b27c06f41a52d89366846dc7be#e15c962dd84f59b27c06f41a52d89366846dc7be"
 dependencies = [
  "async-trait",
  "bip32",
