@@ -67,7 +67,9 @@ pczt = { workspace = true, default-features = false, features = [
     "sapling",
     "transparent",
     "zcp-builder",
+    "io-finalizer",
 ] }
+tokio = { workspace = true, features = ["rt", "macros"] }
 # Seeded RNG for deterministic fixture generation (tests/gen_fixtures.rs).
 rand = "0.8"
 # Transparent fixture construction (tests/gen_fixtures.rs) derives a P2PKH pubkey
