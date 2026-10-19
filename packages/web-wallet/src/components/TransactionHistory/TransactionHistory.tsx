@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { useTransactionHistory } from '../../hooks/useTransactionHistory';
 import { zatsToZec } from '../../utils';
 import type { TransactionHistoryEntry, TransactionType, TransactionStatus } from '../../types/transaction';
@@ -45,11 +46,47 @@ function getStatusBadge(status: TransactionStatus): { text: string; className: s
   }
 }
 
+function shortAddress(address: string): string {
+  return address.length > 24 ? `${address.slice(0, 12)}…${address.slice(-8)}` : address;
+}
+
+/** Shown under the list: the wallet only knows transactions since its sync start block. */
+export const OLDER_HISTORY_HINT =
+  'Only transactions since the sync start block are shown. To see older ones, run Full Resync from an earlier block on the';
+
+/** The repeat action for a row: send to the same recipient again, or shield again. */
+function RepeatLink({ transaction }: TransactionRowProps) {
+  const linkClass =
+    'text-sm font-medium text-orange-600 hover:text-orange-700 underline whitespace-nowrap';
+  const recipient = transaction.recipients?.[0];
+  if (transaction.tx_type === 'Sent' && recipient) {
+    return (
+      <Link
+        to="/dashboard/transfer-balance"
+        state={{ recipient }}
+        className={linkClass}
+        title={`Send to ${recipient} again`}
+      >
+        Send again
+      </Link>
+    );
+  }
+  if (transaction.tx_type === 'Shielded') {
+    return (
+      <Link to="/dashboard/shield-balance" className={linkClass}>
+        Shield again
+      </Link>
+    );
+  }
+  return null;
+}
+
 function TransactionRow({ transaction }: TransactionRowProps) {
   const isPositive = transaction.value > 0;
   const valueColor = isPositive ? 'text-green-600' : 'text-red-600';
   const valuePrefix = isPositive ? '+' : '';
   const statusBadge = getStatusBadge(transaction.status);
+  const recipient = transaction.recipients?.[0];
 
   return (
     <div className="p-4 bg-white rounded-lg border border-gray-200 hover:border-gray-300 transition-colors">
@@ -69,6 +106,14 @@ function TransactionRow({ transaction }: TransactionRowProps) {
           <div className="text-sm text-gray-500">
             {formatTimestamp(transaction.timestamp)}
           </div>
+          {transaction.tx_type === 'Sent' && recipient && (
+            <div className="text-sm text-gray-600 font-mono" title={recipient}>
+              To: {shortAddress(recipient)}
+              {(transaction.recipients?.length ?? 0) > 1 && (
+                <span className="text-gray-400"> +{transaction.recipients.length - 1} more</span>
+              )}
+            </div>
+          )}
           {transaction.memo && (
             <div className="mt-2 text-sm text-gray-600 bg-gray-50 rounded p-2 break-words">
               {transaction.memo}
@@ -84,6 +129,9 @@ function TransactionRow({ transaction }: TransactionRowProps) {
               {transaction.confirmations} confirmation{transaction.confirmations !== 1 ? 's' : ''}
             </div>
           )}
+          <div className="mt-1">
+            <RepeatLink transaction={transaction} />
+          </div>
         </div>
       </div>
       <div className="mt-2 text-xs text-gray-400 font-mono truncate" title={transaction.txid}>
@@ -159,6 +207,19 @@ function TransactionHistory() {
             Load More
           </button>
         </div>
+      )}
+
+      {!loading && (
+        <p className="mt-6 text-center text-sm text-gray-500">
+          {OLDER_HISTORY_HINT}{' '}
+          <Link
+            to="/dashboard/account-summary"
+            className="font-medium text-orange-600 hover:text-orange-700 underline"
+          >
+            Account Summary
+          </Link>{' '}
+          tab.
+        </p>
       )}
     </div>
   );

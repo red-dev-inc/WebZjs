@@ -360,7 +360,9 @@ fn transparent_addr_is_ours(
     };
     bip32_derivation.iter().any(|(claimed_pk, deriv)| {
         match tfvk.derive_pubkey_at_bip32_path(network, account, deriv.derivation_path()) {
-            Ok(pk) => &pk.serialize() == claimed_pk && TransparentAddress::from_pubkey(&pk) == *addr,
+            Ok(pk) => {
+                &pk.serialize() == claimed_pk && TransparentAddress::from_pubkey(&pk) == *addr
+            }
             Err(_) => false,
         }
     })
@@ -378,8 +380,10 @@ fn transparent_addr_is_ours(
 /// invariants (spends are ours, value balances / turnstile identity holds, every
 /// output is commitment-bound, fee is sane) for migrations as for any PCZT.
 fn detect_migration(outputs: &[PcztOutputSummary]) -> Option<MigrationSummary> {
-    let ironwood: Vec<&PcztOutputSummary> =
-        outputs.iter().filter(|o| o.pool == pool::IRONWOOD).collect();
+    let ironwood: Vec<&PcztOutputSummary> = outputs
+        .iter()
+        .filter(|o| o.pool == pool::IRONWOOD)
+        .collect();
     if ironwood.is_empty() {
         return None;
     }
@@ -499,7 +503,8 @@ fn analyze(
             }
 
             for output in bundle.outputs() {
-                if let Err(sapling::pczt::VerifyError::InvalidValueCommitment) = output.verify_cv() {
+                if let Err(sapling::pczt::VerifyError::InvalidValueCommitment) = output.verify_cv()
+                {
                     cv_mismatch = true;
                 }
                 match output.value().map(|v| v.inner()) {
@@ -562,7 +567,9 @@ fn analyze(
                 let value = u64::from(*input.value());
                 total_in += value;
                 let ours = TransparentAddress::from_script_from_chain(input.script_pubkey())
-                    .map(|addr| transparent_addr_is_ours(&network, tfvk, &addr, input.bip32_derivation()))
+                    .map(|addr| {
+                        transparent_addr_is_ours(&network, tfvk, &addr, input.bip32_derivation())
+                    })
                     .unwrap_or(false);
                 if !ours {
                     foreign_input = true;
@@ -577,7 +584,9 @@ fn analyze(
                 let recipient = addr.map(|addr| addr.encode(&network));
                 // Change = the coin pays back to one of our own transparent keys.
                 let is_change = addr
-                    .map(|addr| transparent_addr_is_ours(&network, tfvk, &addr, output.bip32_derivation()))
+                    .map(|addr| {
+                        transparent_addr_is_ours(&network, tfvk, &addr, output.bip32_derivation())
+                    })
                     .unwrap_or(false);
                 total_out += value;
                 outputs.push(PcztOutputSummary {
