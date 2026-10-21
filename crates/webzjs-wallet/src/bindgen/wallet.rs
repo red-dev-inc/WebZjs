@@ -686,6 +686,8 @@ impl WalletSummary {
 pub struct AccountBalance {
     pub sapling_balance: u64,
     pub orchard_balance: u64,
+    /// Ironwood pool (NU6.3). Payments to shielded addresses arrive here after the upgrade.
+    pub ironwood_balance: u64,
     pub unshielded_balance: u64,
     /// Change from sent transactions waiting for mining confirmation
     pub pending_change: u64,
@@ -698,6 +700,7 @@ impl From<zcash_client_backend::data_api::AccountBalance> for AccountBalance {
         AccountBalance {
             sapling_balance: balance.sapling_balance().spendable_value().into(),
             orchard_balance: balance.orchard_balance().spendable_value().into(),
+            ironwood_balance: balance.ironwood_balance().spendable_value().into(),
             unshielded_balance: balance.unshielded_balance().spendable_value().into(),
             pending_change: balance.change_pending_confirmation().into(),
             pending_spendable: balance.value_pending_spendability().into(),
