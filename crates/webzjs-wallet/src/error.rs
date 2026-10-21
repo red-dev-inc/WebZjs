@@ -55,6 +55,10 @@ pub enum Error {
     // See: zcash_client_backend::sync::Error
     #[error("Syncing Error: {0}")]
     Sync(String),
+    #[error("this wallet instance was closed; reload the wallet")]
+    InstanceClosed,
+    #[error("the sync worker stopped after an internal error; reload the page")]
+    SyncWorkerUnavailable,
 
     #[error("Attempted to create a transaction with a memo to an unsupported recipient. Only shielded addresses are supported.")]
     UnsupportedMemoRecipient,

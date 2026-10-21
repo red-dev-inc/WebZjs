@@ -45,6 +45,7 @@
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.14",
     "express": "^4.21.2",
+    "fake-indexeddb": "^6.2.6",
     "globals": "^15.11.0",
     "jsdom": "^24.0.0",
     "parcel": "^2.13.3",

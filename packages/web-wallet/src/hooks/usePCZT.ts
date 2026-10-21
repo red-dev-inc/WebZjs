@@ -156,7 +156,7 @@ export const usePczt = (): IUsePczt => {
       console.info('Shield: Transaction broadcast complete');
 
       // Persist wallet state immediately after broadcast to prevent data loss on crash
-      await flushDbToStore();
+      await flushDbToStore('send');
       console.info('Shield: Wallet state persisted');
 
       // Log transaction history for debugging pending transaction detection
