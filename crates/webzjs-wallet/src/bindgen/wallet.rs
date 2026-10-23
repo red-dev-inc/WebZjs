@@ -1,7 +1,11 @@
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
+use futures_util::future::{select, Either};
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{mpsc, oneshot, Notify};
 use wasm_bindgen::prelude::*;
 
 use tonic_web_wasm_client::Client;
@@ -28,6 +32,121 @@ use zcash_primitives::transaction::TxId;
 pub type MemoryWallet<T> = Wallet<MemoryWalletDb<Network>, T>;
 pub type AccountId = <MemoryWalletDb<Network> as WalletRead>::AccountId;
 pub type NoteRef = <MemoryWalletDb<Network> as InputSource>::NoteRef;
+
+/// What a [`SyncRequest`] asks the sync worker to do.
+enum SyncKind {
+    /// Sync until no scan work remains (`Wallet::sync`).
+    Full,
+    /// One bounded step (`Wallet::sync_step`); `first` refreshes the subtree roots.
+    Step { first: bool },
+}
+
+/// Why a request failed inside the sync worker.
+///
+/// `Error` holds a `JsValue` and is not `Send`, so the worker cannot reply with it directly. The
+/// closed case is kept apart so the caller can surface it as `Error::InstanceClosed` again.
+enum SyncFailure {
+    InstanceClosed,
+    Other(String),
+}
+
+impl From<Error> for SyncFailure {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::InstanceClosed => SyncFailure::InstanceClosed,
+            other => SyncFailure::Other(other.to_string()),
+        }
+    }
+}
+
+/// One `WebWallet::sync` or `WebWallet::sync_step` call, handed to the sync worker.
+struct SyncRequest {
+    wallet: MemoryWallet<Client>,
+    kind: SyncKind,
+    /// `Ok(true)` if more sync work remains (only ever for `SyncKind::Step`), `Ok(false)` otherwise.
+    reply: oneshot::Sender<Result<bool, SyncFailure>>,
+}
+
+/// Set once JS has reported that the sync worker trapped; see [`report_sync_worker_trap`].
+static SYNC_WORKER_POISONED: AtomicBool = AtomicBool::new(false);
+
+/// Wakes callers waiting on a reply from the sync worker when it is reported as trapped.
+fn sync_worker_poison_signal() -> &'static Notify {
+    static SIGNAL: OnceLock<Notify> = OnceLock::new();
+    SIGNAL.get_or_init(Notify::new)
+}
+
+/// Tell the library that the shared sync worker has trapped and will never reply again.
+///
+/// A Rust panic inside the sync worker compiles to a wasm trap. The library cannot observe it: the
+/// worker's event loop simply stops, the request it was running never resolves, and anything queued
+/// behind it would wait forever. The browser does report it, as an uncaught
+/// `RuntimeError: unreachable` delivered to the window's `error` event (the message comes from the
+/// worker thread, so it is not thrown by the `sync` promise). Call this function from that handler.
+///
+/// After this call every in-flight and future `sync` / `sync_step` call rejects with
+/// "the sync worker stopped after an internal error; reload the page" instead of hanging. The
+/// worker is not restarted; the wallet state may be mid-update, so the page should persist nothing
+/// further from this instance and reload. Calling it more than once is harmless.
+///
+/// # Examples
+///
+/// ```javascript
+/// window.addEventListener("error", (event) => {
+///   if (event.message && event.message.includes("unreachable")) {
+///     report_sync_worker_trap();
+///   }
+/// });
+/// ```
+#[wasm_bindgen]
+pub fn report_sync_worker_trap() {
+    if !SYNC_WORKER_POISONED.swap(true, Ordering::SeqCst) {
+        tracing::error!("sync worker reported as trapped; refusing further sync requests");
+    }
+    sync_worker_poison_signal().notify_waiters();
+}
+
+/// Whether [`report_sync_worker_trap`] has been called.
+fn sync_worker_poisoned() -> bool {
+    SYNC_WORKER_POISONED.load(Ordering::SeqCst)
+}
+
+/// The single web worker that runs every `WebWallet::sync` and `WebWallet::sync_step` call,
+/// spawned on first use.
+///
+/// Each call used to spawn its own worker. Those workers are never torn down: `wasm_thread` is built
+/// with `keep_worker_alive`, and a worker's thread-locals are not dropped even when it is closed.
+/// The tracing registry gives each thread that creates a span one of only 128 slots on wasm32 and
+/// relies on the thread-local drop to hand it back, so the periodic rescan exhausted the slots after
+/// about 128 syncs (around 75 minutes at the default interval) and the next sync panicked with
+/// "Thread count overflowed the configured max count". Reusing one worker keeps the thread count,
+/// and the memory held by idle workers, constant. Requests run one at a time, in order.
+fn sync_worker() -> &'static mpsc::UnboundedSender<SyncRequest> {
+    static WORKER: OnceLock<mpsc::UnboundedSender<SyncRequest>> = OnceLock::new();
+    WORKER.get_or_init(|| {
+        let (tx, mut rx) = mpsc::unbounded_channel::<SyncRequest>();
+        thread::Builder::new()
+            .name("sync".to_string())
+            .spawn_async(move || async move {
+                assert!(thread::is_web_worker_thread());
+                while let Some(SyncRequest {
+                    wallet,
+                    kind,
+                    reply,
+                }) = rx.recv().await
+                {
+                    let result = match kind {
+                        SyncKind::Full => wallet.sync().await.map(|()| false),
+                        SyncKind::Step { first } => wallet.sync_step(first).await,
+                    };
+                    // The caller only goes away if its future was dropped; nothing to do then.
+                    let _ = reply.send(result.map_err(SyncFailure::from));
+                }
+            })
+            .unwrap_throw();
+        tx
+    })
+}
 
 /// # A Zcash wallet
 ///
@@ -69,6 +188,17 @@ pub type NoteRef = <MemoryWalletDb<Network> as InputSource>::NoteRef;
 ///
 /// ```javascript
 /// await wallet.sync();
+/// ```
+///
+/// A sync can also be driven one bounded step at a time with `sync_step`, which releases the wallet lock between
+/// steps so the wallet can be persisted with `db_to_bytes` as it goes and stopped with `close`:
+///
+/// ```javascript
+/// let first = true;
+/// while (await wallet.sync_step(first)) {
+///   first = false;
+///   await persist(await wallet.db_to_bytes());
+/// }
 /// ```
 ///
 /// ## Transacting
@@ -268,43 +398,155 @@ impl WebWallet {
     ///
     /// Start a background sync task which will fetch and scan blocks from the connected lighwalletd server
     ///
-    /// IMPORTANT: This will spawn a new webworker which will handle the sync task. The sync task will continue to run in the background until the sync process is complete.
+    /// IMPORTANT: The sync runs on a dedicated webworker that is shared by every wallet and reused for every call,
+    /// so concurrent calls run one after another. The sync task will continue to run in the background until the sync process is complete.
     /// During this time the main thread will not block but certain wallet methods may temporarily block while the wallet is being written to during the sync.
+    /// The sync is performed in bounded steps (see `sync_step`): the wallet lock is released between batches, and
+    /// closing the instance with `close` stops the sync at the next batch boundary.
     ///
+    /// A trap inside the worker (a Rust panic compiled to wasm) cannot be observed from Rust: the worker stops
+    /// taking requests and the trapped call never resolves. The browser surfaces it as an uncaught
+    /// `RuntimeError: unreachable` on the window's `error` event, not as a rejection of this promise. JS should
+    /// call `report_sync_worker_trap()` from that handler; from then on this call and every later `sync` /
+    /// `sync_step` reject with "the sync worker stopped after an internal error; reload the page" instead of
+    /// hanging or queueing behind the dead worker.
+    ///
+    /// # Errors
+    ///
+    /// Rejects with "the sync worker stopped after an internal error; reload the page" once the worker has been
+    /// reported as trapped, with "this wallet instance was closed; reload the wallet" if `close` has been called,
+    /// and with a "Syncing Error" for server, cache, scanning and wallet errors.
+    ///
+    /// # Examples
+    ///
+    /// ```javascript
+    /// await wallet.sync();
+    /// ```
     pub async fn sync(&self) -> Result<(), Error> {
+        self.run_on_sync_worker(SyncKind::Full).await.map(|_| ())
+    }
+
+    /// Perform one bounded step of the sync on the shared sync webworker.
+    ///
+    /// A step refreshes the wallet's view of the chain tip, then fetches and scans at most one batch of blocks
+    /// before releasing the wallet lock, so `db_to_bytes` and other wallet methods can run between steps and the
+    /// wallet state at every step boundary can be resumed from later, including from a new page load restored
+    /// from `db_to_bytes`. A sync is complete when a step resolves to `false`.
+    ///
+    /// # Arguments
+    ///
+    /// * `first` - `true` for the first step of a sync (and after a long pause); the subtree roots are then
+    ///   refreshed from the server before scanning. Pass `false` on later steps to skip that round trip.
+    ///
+    /// # Returns
+    ///
+    /// `true` if more sync work remains and `sync_step` should be called again, `false` once the wallet reports
+    /// nothing left to scan.
+    ///
+    /// # Errors
+    ///
+    /// Rejects with "the sync worker stopped after an internal error; reload the page" once the worker has been
+    /// reported as trapped (see `report_sync_worker_trap`), with "this wallet instance was closed; reload the
+    /// wallet" if `close` has been called, and with a "Syncing Error" for server, cache, scanning and wallet
+    /// errors.
+    ///
+    /// # Examples
+    ///
+    /// ```javascript
+    /// let first = true;
+    /// while (await wallet.sync_step(first)) {
+    ///   first = false;
+    ///   await persist(await wallet.db_to_bytes());
+    /// }
+    /// ```
+    pub async fn sync_step(&self, first: bool) -> Result<bool, Error> {
+        self.run_on_sync_worker(SyncKind::Step { first }).await
+    }
+
+    /// The id of this wallet instance.
+    ///
+    /// Every `new WebWallet(...)` gets a fresh id; clones share it. Use it to tell whether a sync step's result
+    /// still belongs to the wallet currently in use after the page has swapped in a new instance.
+    ///
+    /// # Examples
+    ///
+    /// ```javascript
+    /// const id = wallet.instance_id;
+    /// ```
+    #[wasm_bindgen(getter)]
+    pub fn instance_id(&self) -> String {
+        self.inner.instance_id().to_string()
+    }
+
+    /// Close this wallet instance.
+    ///
+    /// After this, `sync`, `sync_step`, `db_to_bytes`, account creation and every transaction building or
+    /// sending method reject with "this wallet instance was closed; reload the wallet". A sync step that is
+    /// already running finishes its current batch, and the next step is refused, so a sync loop over this
+    /// instance stops at the next batch boundary. Call it before replacing the instance with a new one (for
+    /// example on a full resync) so that a step still queued for the old instance cannot write into it.
+    /// Closing is idempotent and cannot be undone.
+    ///
+    /// # Examples
+    ///
+    /// ```javascript
+    /// oldWallet.close();
+    /// const wallet = new WebWallet("main", url, 10, 10, bytes);
+    /// ```
+    pub fn close(&self) {
+        self.inner.close();
+    }
+
+    /// Whether `close` has been called on this instance.
+    ///
+    /// # Examples
+    ///
+    /// ```javascript
+    /// if (wallet.is_closed()) { /* reload */ }
+    /// ```
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+
+    /// Hand a request to the shared sync worker and wait for its reply.
+    ///
+    /// Refuses immediately, without queueing, when the worker has been reported as trapped or the instance is
+    /// closed. While waiting it also watches the poison signal, so a request that is in flight when the worker
+    /// traps is released as soon as JS reports the trap.
+    async fn run_on_sync_worker(&self, kind: SyncKind) -> Result<bool, Error> {
         assert!(!thread::is_web_worker_thread());
 
-        let db = self.inner.clone();
+        if sync_worker_poisoned() {
+            return Err(Error::SyncWorkerUnavailable);
+        }
+        if self.inner.is_closed() {
+            return Err(Error::InstanceClosed);
+        }
 
-        let sync_handler = thread::Builder::new()
-            .name("sync".to_string())
-            .spawn_async(|| async {
-                assert!(thread::is_web_worker_thread());
-                tracing::debug!(
-                    "Current num threads (wasm_thread) {}",
-                    rayon::current_num_threads()
-                );
-
-                let db = db;
-                // Convert error to String since Error isn't Send (contains JsValue)
-                db.sync().await.map_err(|e| e.to_string())
+        let (reply, result) = oneshot::channel();
+        sync_worker()
+            .send(SyncRequest {
+                wallet: self.inner.clone(),
+                kind,
+                reply,
             })
-            .unwrap_throw()
-            .join_async();
+            .map_err(|_| Error::SyncWorkerUnavailable)?;
 
-        // sync_handler.await returns Result<Result<(), String>, Box<dyn Any + Send>>
-        // The outer Result is for the join (thread panics), inner is sync result
-        match sync_handler.await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(err_string)) => {
+        let poisoned = sync_worker_poison_signal().notified();
+        futures_util::pin_mut!(poisoned);
+        match select(result, poisoned).await {
+            Either::Left((Ok(Ok(more)), _)) => Ok(more),
+            Either::Left((Ok(Err(SyncFailure::InstanceClosed)), _)) => Err(Error::InstanceClosed),
+            Either::Left((Ok(Err(SyncFailure::Other(err_string))), _)) => {
                 tracing::warn!("Sync error (will be retried by caller): {}", err_string);
                 Err(Error::Sync(err_string))
             }
-            Err(panic_error) => {
-                let msg = format!("Sync thread panicked: {:?}", panic_error);
+            Either::Left((Err(_), _)) => {
+                let msg = "Sync worker dropped the request without replying".to_string();
                 tracing::error!("{}", msg);
                 Err(Error::Sync(msg))
             }
+            Either::Right(((), _)) => Err(Error::SyncWorkerUnavailable),
         }
     }
 
@@ -686,6 +928,8 @@ impl WalletSummary {
 pub struct AccountBalance {
     pub sapling_balance: u64,
     pub orchard_balance: u64,
+    /// Ironwood pool (NU6.3). Payments to shielded addresses arrive here after the upgrade.
+    pub ironwood_balance: u64,
     pub unshielded_balance: u64,
     /// Change from sent transactions waiting for mining confirmation
     pub pending_change: u64,
@@ -698,6 +942,7 @@ impl From<zcash_client_backend::data_api::AccountBalance> for AccountBalance {
         AccountBalance {
             sapling_balance: balance.sapling_balance().spendable_value().into(),
             orchard_balance: balance.orchard_balance().spendable_value().into(),
+            ironwood_balance: balance.ironwood_balance().spendable_value().into(),
             unshielded_balance: balance.unshielded_balance().spendable_value().into(),
             pending_change: balance.change_pending_confirmation().into(),
             pending_spendable: balance.value_pending_spendability().into(),
