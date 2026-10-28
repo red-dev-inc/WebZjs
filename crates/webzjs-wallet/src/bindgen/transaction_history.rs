@@ -226,16 +226,16 @@ pub fn extract_transaction_history(
             zcash_client_backend::wallet::Recipient::External { output_pool, .. } => {
                 match output_pool {
                     zcash_protocol::PoolType::Transparent => "transparent",
-                    zcash_protocol::PoolType::Shielded(
-                        zcash_protocol::ShieldedProtocol::Sapling,
-                    ) => "sapling",
-                    zcash_protocol::PoolType::Shielded(
-                        zcash_protocol::ShieldedProtocol::Orchard,
-                    ) => "orchard",
+                    zcash_protocol::PoolType::Shielded(zcash_protocol::ShieldedPool::Sapling) => {
+                        "sapling"
+                    }
+                    zcash_protocol::PoolType::Shielded(zcash_protocol::ShieldedPool::Orchard) => {
+                        "orchard"
+                    }
                     // NU6.3 Ironwood pool.
-                    zcash_protocol::PoolType::Shielded(
-                        zcash_protocol::ShieldedProtocol::Ironwood,
-                    ) => "ironwood",
+                    zcash_protocol::PoolType::Shielded(zcash_protocol::ShieldedPool::Ironwood) => {
+                        "ironwood"
+                    }
                 }
             }
             zcash_client_backend::wallet::Recipient::EphemeralTransparent { .. } => "transparent",

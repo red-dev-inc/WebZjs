@@ -190,12 +190,12 @@ pub fn pczt_validate_inner(
 
 /// Encode an Orchard receiver as a Unified Address string for display.
 fn encode_orchard(network: &Network, addr: &orchard::Address) -> Option<String> {
-    UnifiedAddress::from_receivers(Some(*addr), None, None).map(|ua| ua.encode(network))
+    UnifiedAddress::from_receivers(Some(*addr), None, None, None, None).map(|ua| ua.encode(network))
 }
 
 /// Encode a Sapling receiver as a Unified Address string for display.
 fn encode_sapling(network: &Network, addr: &sapling::PaymentAddress) -> Option<String> {
-    UnifiedAddress::from_receivers(None, Some(*addr), None).map(|ua| ua.encode(network))
+    UnifiedAddress::from_receivers(None, Some(*addr), None, None, None).map(|ua| ua.encode(network))
 }
 
 /// True iff this Orchard spend is recoverable under `ofvk`.
@@ -414,7 +414,7 @@ fn analyze(
     let ofvk = ufvk.orchard();
     let sdfvk = ufvk.sapling();
     let sfvk = sdfvk.map(|dfvk| dfvk.fvk());
-    let tfvk = ufvk.transparent();
+    let tfvk = ufvk.p2pkh();
 
     let mut outputs: Vec<PcztOutputSummary> = Vec::new();
     let mut total_in: u64 = 0;
