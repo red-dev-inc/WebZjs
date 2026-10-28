@@ -8,6 +8,7 @@ use tonic::{
     codegen::{Body, Bytes, StdError},
 };
 
+use crate::chain_params::{change_pool_at, orchard_circuit_version, WalletClock};
 use crate::error::Error;
 use crate::BlockRange;
 use webzjs_common::Network;
@@ -47,16 +48,17 @@ use zcash_client_backend::wallet::OvkPolicy;
 use zcash_client_backend::zip321::{Payment, TransactionRequest};
 use zcash_client_memory::{MemBlockCache, MemoryWalletDb};
 use zcash_keys::keys::{UnifiedFullViewingKey, UnifiedSpendingKey};
+use zcash_primitives::transaction::builder::BundlePadding;
 use zcash_primitives::transaction::fees::FeeRule;
 use zcash_primitives::transaction::TxId;
 use zcash_proofs::prover::LocalTxProver;
-use zcash_protocol::ShieldedProtocol;
 
 use zcash_client_backend::sync::run;
 
-use zcash_protocol::consensus::BranchId;
 use zcash_protocol::consensus::Parameters;
+use zcash_protocol::consensus::{BlockHeight, BranchId};
 use zcash_protocol::value::Zatoshis;
+use zcash_protocol::ShieldedPool;
 use zip32;
 use zip32::fingerprint::SeedFingerprint;
 
@@ -301,6 +303,16 @@ where
             .get_wallet_summary(self.min_confirmations)?)
     }
 
+    /// Returns the pool that change goes to in a transaction mined next, chosen from the network
+    /// upgrade in force at that height (Ironwood since NU6.3).
+    async fn change_pool(&self) -> Result<ShieldedPool, Error> {
+        let tip = self.db.read().await.chain_height()?.ok_or_else(|| {
+            Error::Generic("Wallet has not been synced yet. Please sync first.".to_string())
+        })?;
+        let target_height: BlockHeight = tip + 1;
+        Ok(change_pool_at(&self.network, target_height))
+    }
+
     ///
     /// Create a transaction proposal to send funds from the wallet to a given address
     ///
@@ -312,10 +324,11 @@ where
     ) -> Result<Proposal<StandardFeeRule, NoteRef>, Error> {
         let input_selector = GreedyInputSelector::new();
 
+        let change_pool = self.change_pool().await?;
         let change_strategy = MultiOutputChangeStrategy::new(
             StandardFeeRule::Zip317,
             None,
-            ShieldedProtocol::Orchard,
+            change_pool,
             DustOutputPolicy::default(),
             SplitPolicy::with_min_output_value(
                 NonZeroUsize::new(self.target_note_count)
@@ -350,6 +363,8 @@ where
             // spend policy preserves prior behaviour; `None` lets the builder pick
             // the tx version for the target height (v6 post-NU6.3 activation).
             &SpendPolicy::default(),
+            // client_backend 0.25 added optional input locking; no locks are held across calls.
+            None,
             None,
         )
         .map_err(|_e| Error::Generic("something bad happened when calling propose transfer. Possibly insufficient balance..".to_string()))?;
@@ -380,6 +395,8 @@ where
         >(
             &mut *db,
             &self.network,
+            &WalletClock,
+            &mut rand10::rng(),
             &prover,
             &prover,
             &SpendingKeys::from_unified_spending_key(usk.clone()),
@@ -496,10 +513,11 @@ where
             ));
         }
 
+        let change_pool = self.change_pool().await?;
         let change_strategy = MultiOutputChangeStrategy::new(
             StandardFeeRule::Zip317,
             None,
-            ShieldedProtocol::Orchard,
+            change_pool,
             DustOutputPolicy::default(),
             SplitPolicy::with_min_output_value(
                 NonZeroUsize::new(self.target_note_count)
@@ -556,6 +574,7 @@ where
             account_id,
             self.min_confirmations, // librustzcash operates under the assumption of zero or one conf being the same but that could change.
             CoinbaseFilter::AllTransparentOutputs, // shield all transparent outputs (preserves pre-0.23 behavior, before this filter existed)
+            None,                                  // no input locking
         )
         .map_err(|e| {
             tracing::error!("pczt_shield: propose_shielding failed: {:?}", e);
@@ -574,13 +593,15 @@ where
         >(
             &mut *db,
             &self.network,
+            &WalletClock,
+            &mut rand10::rng(),
             account_id,
             OvkPolicy::Sender,
             &proposal,
-            // client_backend 0.24: explicit expiry height (None = builder default)
-            // and the Orchard-pool bundle type for the created PCZT.
+            // Explicit expiry height (None = builder default) and the padding of the
+            // Orchard-family bundles of the created PCZT.
             None,
-            orchard::builder::BundleType::DEFAULT,
+            BundlePadding::DEFAULT,
         )
         .map_err(|e| {
             tracing::error!("pczt_shield: create_pczt_from_proposal failed: {:?}", e);
@@ -629,10 +650,11 @@ where
         }
 
         // Create the PCZT.
+        let change_pool = self.change_pool().await?;
         let change_strategy = MultiOutputChangeStrategy::new(
             StandardFeeRule::Zip317,
             None,
-            ShieldedProtocol::Orchard,
+            change_pool,
             DustOutputPolicy::default(),
             SplitPolicy::with_min_output_value(
                 NonZeroUsize::new(self.target_note_count)
@@ -656,6 +678,8 @@ where
             request,
             self.min_confirmations,
             &SpendPolicy::default(),
+            // client_backend 0.25 added optional input locking; no locks are held across calls.
+            None,
             None,
         )
             .map_err(|e| Error::Generic(format!("something bad happened when calling propose transfer. Possibly insufficient balance... {e:?}")))?;
@@ -670,13 +694,15 @@ where
         >(
             &mut *db,
             &self.network,
+            &WalletClock,
+            &mut rand10::rng(),
             account_id,
             OvkPolicy::Sender,
             &proposal,
-            // client_backend 0.24: explicit expiry height (None = builder default)
-            // and the Orchard-pool bundle type for the created PCZT.
+            // Explicit expiry height (None = builder default) and the padding of the
+            // Orchard-family bundles of the created PCZT.
             None,
-            orchard::builder::BundleType::DEFAULT,
+            BundlePadding::DEFAULT,
         )
         .map_err(|e| {
             tracing::error!("pczt_create: create_pczt_from_proposal failed: {:?}", e);
@@ -733,25 +759,43 @@ where
             pczt
         };
 
-        // orchard 0.15 (NU6.3) requires an explicit circuit version. Derive it from the
-        // PCZT's target consensus branch, mirroring zcash_primitives' transaction builder:
-        // Nu6_3 -> PostNu6_3 (the Ironwood-era circuit that enforces the disableCrossAddress
-        // constraint sealing the Orchard pool); everything current (Nu6_2) -> FixedPostNu6_2.
-        // The same version must build the verifying key when extracting the transaction below.
-        let orchard_circuit_version = match BranchId::try_from(*pczt.global().consensus_branch_id())
-        {
-            Ok(BranchId::Nu6_3) => orchard::circuit::OrchardCircuitVersion::PostNu6_3,
-            _ => orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2,
-        };
+        // Orchard-family bundles (Orchard and Ironwood) need a circuit version, derived from the
+        // PCZT's target consensus branch via its Orchard protocol revision: NU6.2 uses the fixed
+        // circuit, and NU6.3 and every later upgrade (NU7 included) the post-NU6.3 circuit that
+        // enforces the disableCrossAddress constraint. The same version must build the verifying
+        // key when the transaction is extracted.
+        let branch = BranchId::try_from(*pczt.global().consensus_branch_id()).map_err(|e| {
+            Error::PcztProve(format!("PCZT has an unknown consensus branch id: {:?}", e))
+        })?;
+        let orchard_circuit_version = orchard_circuit_version(branch).ok_or_else(|| {
+            Error::PcztProve(format!(
+                "Cannot create Orchard proofs for consensus branch {:?}",
+                branch
+            ))
+        })?;
 
         let prover = LocalTxProver::bundled();
-        let pczt = Prover::new(pczt)
-            .create_orchard_proof(&orchard::circuit::ProvingKey::build(
-                orchard_circuit_version,
-            ))
-            .map_err(|e| Error::PcztProve(format!("Failed to create Orchard proof: {e:?}")))?
-            .create_sapling_proofs(&prover, &prover)
-            .map_err(|e| Error::PcztProve(format!("Failed to create Sapling proofs: {e:?}")))?
+        let mut proofs = Prover::new(pczt);
+        if proofs.requires_orchard_proof() || proofs.requires_ironwood_proof() {
+            let proving_key = orchard::circuit::ProvingKey::build(orchard_circuit_version);
+            if proofs.requires_orchard_proof() {
+                proofs = proofs
+                    .create_orchard_proof(rand10::rng(), &proving_key)
+                    .map_err(|e| {
+                        Error::PcztProve(format!("Failed to create Orchard proof: {:?}", e))
+                    })?;
+            }
+            if proofs.requires_ironwood_proof() {
+                proofs = proofs
+                    .create_ironwood_proof(rand10::rng(), &proving_key)
+                    .map_err(|e| {
+                        Error::PcztProve(format!("Failed to create Ironwood proof: {:?}", e))
+                    })?;
+            }
+        }
+        let pczt = proofs
+            .create_sapling_proofs(rand10::rng(), &prover, &prover)
+            .map_err(|e| Error::PcztProve(format!("Failed to create Sapling proofs: {:?}", e)))?
             .finish();
         Ok(pczt)
     }
@@ -799,16 +843,22 @@ where
         // Build the Orchard verifying key with the circuit version for this PCZT's target
         // branch (Nu6_3 -> PostNu6_3, else FixedPostNu6_2), matching how the proof was
         // created. See the proving-key derivation in the pczt_prove path.
-        let orchard_circuit_version = match BranchId::try_from(*pczt.global().consensus_branch_id())
-        {
-            Ok(BranchId::Nu6_3) => orchard::circuit::OrchardCircuitVersion::PostNu6_3,
-            _ => orchard::circuit::OrchardCircuitVersion::FixedPostNu6_2,
-        };
+        let branch = BranchId::try_from(*pczt.global().consensus_branch_id()).map_err(|e| {
+            Error::PcztSend(format!("PCZT has an unknown consensus branch id: {:?}", e))
+        })?;
+        let orchard_circuit_version = orchard_circuit_version(branch).ok_or_else(|| {
+            Error::PcztSend(format!(
+                "Cannot verify Orchard proofs for consensus branch {:?}",
+                branch
+            ))
+        })?;
         let prover = LocalTxProver::bundled();
         let (spend_vk, output_vk) = prover.verifying_keys();
         let mut db = self.db.write().await;
         let txid = extract_and_store_transaction_from_pczt::<_, ()>(
             &mut *db,
+            &WalletClock,
+            &mut rand10::rng(),
             pczt,
             Some((&spend_vk, &output_vk)),
             Some(&orchard::circuit::VerifyingKey::build(

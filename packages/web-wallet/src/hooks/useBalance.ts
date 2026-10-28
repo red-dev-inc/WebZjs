@@ -52,11 +52,14 @@ const useBalance = () => {
     let livePendingSpendable = 0;
     let liveSapling = 0;
     let liveOrchard = 0;
+    let liveIronwood = 0;
 
     if (activeBalanceReport) {
       liveSapling = activeBalanceReport[1].sapling_balance || 0;
       liveOrchard = activeBalanceReport[1].orchard_balance || 0;
-      confirmedShielded = liveSapling + liveOrchard;
+      // Ironwood receives new shielded value since NU6.3; it must be counted or funds show as 0.
+      liveIronwood = activeBalanceReport[1].ironwood_balance || 0;
+      confirmedShielded = liveSapling + liveOrchard + liveIronwood;
       confirmedUnshielded = activeBalanceReport[1].unshielded_balance || 0;
       livePendingChange = activeBalanceReport[1].pending_change || 0;
       livePendingSpendable = activeBalanceReport[1].pending_spendable || 0;

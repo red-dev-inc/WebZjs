@@ -35,8 +35,8 @@ use orchard::Address;
 use pczt::roles::creator::Creator;
 use pczt::roles::redactor::Redactor;
 
-use rand::rngs::StdRng;
-use rand::{RngCore, SeedableRng};
+use rand10::rngs::StdRng;
+use rand10::{Rng, SeedableRng};
 
 use webzjs_common::Network;
 use zcash_keys::keys::UnifiedSpendingKey;

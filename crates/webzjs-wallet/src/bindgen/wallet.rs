@@ -214,7 +214,7 @@ impl WebWallet {
         birthday_height: Option<u32>,
     ) -> Result<u32, Error> {
         let ufvk = UnifiedFullViewingKey::decode(&self.inner.network, encoded_ufvk)
-            .map_err(Error::KeyParse)?;
+            .map_err(|e| Error::KeyParse(e.to_string()))?;
         let derivation = Some(Zip32Derivation::new(
             seed_fingerprint.into(),
             zip32::AccountId::try_from(account_hd_index)?,
@@ -251,7 +251,7 @@ impl WebWallet {
         birthday_height: Option<u32>,
     ) -> Result<u32, Error> {
         let ufvk = UnifiedFullViewingKey::decode(&self.inner.network, encoded_ufvk)
-            .map_err(Error::KeyParse)?;
+            .map_err(|e| Error::KeyParse(e.to_string()))?;
 
         self.inner
             .import_ufvk(
@@ -672,6 +672,8 @@ pub struct WalletSummary {
     // scan_progress: Option<Ratio<u64>>,
     pub next_sapling_subtree_index: u64,
     pub next_orchard_subtree_index: u64,
+    #[serde(default)]
+    pub next_ironwood_subtree_index: u64,
 }
 
 #[wasm_bindgen]
@@ -682,28 +684,7 @@ impl WalletSummary {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AccountBalance {
-    pub sapling_balance: u64,
-    pub orchard_balance: u64,
-    pub unshielded_balance: u64,
-    /// Change from sent transactions waiting for mining confirmation
-    pub pending_change: u64,
-    /// Received notes waiting for required confirmations to become spendable
-    pub pending_spendable: u64,
-}
-
-impl From<zcash_client_backend::data_api::AccountBalance> for AccountBalance {
-    fn from(balance: zcash_client_backend::data_api::AccountBalance) -> Self {
-        AccountBalance {
-            sapling_balance: balance.sapling_balance().spendable_value().into(),
-            orchard_balance: balance.orchard_balance().spendable_value().into(),
-            unshielded_balance: balance.unshielded_balance().spendable_value().into(),
-            pending_change: balance.change_pending_confirmation().into(),
-            pending_spendable: balance.value_pending_spendability().into(),
-        }
-    }
-}
+pub use crate::balance::AccountBalance;
 
 impl<T> From<zcash_client_backend::data_api::WalletSummary<T>> for WalletSummary
 where
@@ -724,6 +705,7 @@ where
             fully_scanned_height: summary.fully_scanned_height().into(),
             next_sapling_subtree_index: summary.next_sapling_subtree_index(),
             next_orchard_subtree_index: summary.next_orchard_subtree_index(),
+            next_ironwood_subtree_index: summary.next_ironwood_subtree_index(),
         }
     }
 }
