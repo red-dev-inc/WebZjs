@@ -87,7 +87,7 @@ fn attacker_addr() -> String {
         .expect("UFVK has an Orchard key")
         .clone();
     let addr = ofvk.address_at(0u32, orchard::keys::Scope::External);
-    UnifiedAddress::from_receivers(Some(addr), None, None)
+    UnifiedAddress::from_receivers(Some(addr), None, None, None, None)
         .expect("orchard-only UA")
         .encode(&network)
 }
@@ -305,7 +305,7 @@ fn bridge_orchard_addr() -> String {
         .expect("UFVK has an Orchard key")
         .clone();
     let addr = ofvk.address_at(0u32, orchard::keys::Scope::External);
-    UnifiedAddress::from_receivers(Some(addr), None, None)
+    UnifiedAddress::from_receivers(Some(addr), None, None, None, None)
         .expect("orchard-only UA")
         .encode(&network)
 }

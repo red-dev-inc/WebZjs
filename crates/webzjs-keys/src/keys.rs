@@ -115,7 +115,7 @@ impl UnifiedSpendingKey {
 
     pub fn to_sapling_proof_generation_key(&self) -> ProofGenerationKey {
         ProofGenerationKey {
-            inner: self.inner.sapling().expsk.proof_generation_key(),
+            inner: self.inner.sapling().expsk().proof_generation_key(),
         }
     }
 }
@@ -146,7 +146,9 @@ impl UnifiedFullViewingKey {
     ///
     pub fn encode(&self, network: &str) -> Result<String, Error> {
         let network = Network::from_str(network)?;
-        Ok(self.inner.encode(&network))
+        self.inner
+            .encode(&network)
+            .map_err(|e| Error::KeyEncoding(e.to_string()))
     }
 
     /// Construct a UFVK from its encoded string representation
@@ -161,7 +163,7 @@ impl UnifiedFullViewingKey {
         let network = Network::from_str(network)?;
         Ok(Self {
             inner: zcash_keys::keys::UnifiedFullViewingKey::decode(&network, encoding)
-                .map_err(Error::KeyDecoding)?,
+                .map_err(|e| Error::KeyDecoding(e.to_string()))?,
         })
     }
 

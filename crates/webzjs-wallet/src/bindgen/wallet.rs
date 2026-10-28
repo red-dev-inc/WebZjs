@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 
 use tonic_web_wasm_client::Client;
 
+use crate::bindgen::payments::payments_from_js;
 use crate::error::Error;
 use crate::validation::validate_confirmations_policy;
 use crate::wallet::usk_from_seed_str;
@@ -214,7 +215,7 @@ impl WebWallet {
         birthday_height: Option<u32>,
     ) -> Result<u32, Error> {
         let ufvk = UnifiedFullViewingKey::decode(&self.inner.network, encoded_ufvk)
-            .map_err(Error::KeyParse)?;
+            .map_err(|e| Error::KeyParse(e.to_string()))?;
         let derivation = Some(Zip32Derivation::new(
             seed_fingerprint.into(),
             zip32::AccountId::try_from(account_hd_index)?,
@@ -251,7 +252,7 @@ impl WebWallet {
         birthday_height: Option<u32>,
     ) -> Result<u32, Error> {
         let ufvk = UnifiedFullViewingKey::decode(&self.inner.network, encoded_ufvk)
-            .map_err(Error::KeyParse)?;
+            .map_err(|e| Error::KeyParse(e.to_string()))?;
 
         self.inner
             .import_ufvk(
@@ -341,6 +342,56 @@ impl WebWallet {
         let proposal = self
             .inner
             .propose_transfer(AccountId::from(account_id), to_address, value)
+            .await?;
+        Ok(proposal.into())
+    }
+
+    /// Propose one transaction that pays one or more recipients, each with an optional memo.
+    ///
+    /// Everything is validated first; a failure is an `Error` whose `code` property is one of
+    /// `no_payments`, `invalid_address`, `wrong_network`, `invalid_amount`,
+    /// `zero_valued_transparent_output`, `memo_for_transparent_recipient`, `memo_too_long`,
+    /// `malformed_payment`, `invalid_memo_type`, `total_overflow`, `insufficient_funds` or
+    /// `proposal_failed`.
+    ///
+    /// # Arguments
+    ///
+    /// * `account_id` - The ID of the account in this wallet to send funds from
+    /// * `payments` - A list of `{ to, value, memo? }`. `memo` is a `string` (text memo) or a
+    ///   `Uint8Array` (raw bytes), at most 512 bytes, and only for shielded recipients.
+    ///
+    /// # Examples
+    ///
+    /// ```javascript
+    /// const proposal = await wallet.propose_payments(1, [
+    ///   { to: ua, value: 100000, memo: "hello" },
+    ///   { to: ua2, value: 50000, memo: new Uint8Array([0xff, 1, 2, 3]) },
+    /// ]);
+    /// console.log(proposal.fee, proposal.describe());
+    /// ```
+    pub async fn propose_payments(
+        &self,
+        account_id: u32,
+        #[wasm_bindgen(unchecked_param_type = "PaymentRequest[]")] payments: JsValue,
+    ) -> Result<Proposal, Error> {
+        let payments = payments_from_js(&payments)?;
+        let proposal = self
+            .inner
+            .propose_payments(AccountId::from(account_id), payments)
+            .await?;
+        Ok(proposal.into())
+    }
+
+    /// Propose a transaction from a [ZIP 321](https://zips.z.cash/zip-0321) payment URI
+    /// (`zcash:...`), which may name several recipients and memos.
+    pub async fn propose_from_zip321(
+        &self,
+        account_id: u32,
+        uri: String,
+    ) -> Result<Proposal, Error> {
+        let proposal = self
+            .inner
+            .propose_from_zip321(AccountId::from(account_id), &uri)
             .await?;
         Ok(proposal.into())
     }
@@ -500,6 +551,31 @@ impl WebWallet {
         let to_address = ZcashAddress::try_from_encoded(&to_address)?;
         self.inner
             .pczt_create(AccountId::from(account_id), to_address, value)
+            .await
+            .map(Into::into)
+    }
+
+    /// Like `propose_payments`, but creates a PCZT (not signed, not proven, not sent).
+    pub async fn pczt_create_payments(
+        &self,
+        account_id: u32,
+        #[wasm_bindgen(unchecked_param_type = "PaymentRequest[]")] payments: JsValue,
+    ) -> Result<Pczt, Error> {
+        let payments = payments_from_js(&payments)?;
+        self.inner
+            .pczt_create_payments(AccountId::from(account_id), payments)
+            .await
+            .map(Into::into)
+    }
+
+    /// Like `propose_from_zip321`, but creates a PCZT (not signed, not proven, not sent).
+    pub async fn pczt_create_from_zip321(
+        &self,
+        account_id: u32,
+        uri: String,
+    ) -> Result<Pczt, Error> {
+        self.inner
+            .pczt_create_from_zip321(AccountId::from(account_id), &uri)
             .await
             .map(Into::into)
     }
@@ -672,6 +748,8 @@ pub struct WalletSummary {
     // scan_progress: Option<Ratio<u64>>,
     pub next_sapling_subtree_index: u64,
     pub next_orchard_subtree_index: u64,
+    #[serde(default)]
+    pub next_ironwood_subtree_index: u64,
 }
 
 #[wasm_bindgen]
@@ -682,28 +760,7 @@ impl WalletSummary {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AccountBalance {
-    pub sapling_balance: u64,
-    pub orchard_balance: u64,
-    pub unshielded_balance: u64,
-    /// Change from sent transactions waiting for mining confirmation
-    pub pending_change: u64,
-    /// Received notes waiting for required confirmations to become spendable
-    pub pending_spendable: u64,
-}
-
-impl From<zcash_client_backend::data_api::AccountBalance> for AccountBalance {
-    fn from(balance: zcash_client_backend::data_api::AccountBalance) -> Self {
-        AccountBalance {
-            sapling_balance: balance.sapling_balance().spendable_value().into(),
-            orchard_balance: balance.orchard_balance().spendable_value().into(),
-            unshielded_balance: balance.unshielded_balance().spendable_value().into(),
-            pending_change: balance.change_pending_confirmation().into(),
-            pending_spendable: balance.value_pending_spendability().into(),
-        }
-    }
-}
+pub use crate::balance::AccountBalance;
 
 impl<T> From<zcash_client_backend::data_api::WalletSummary<T>> for WalletSummary
 where
@@ -724,6 +781,7 @@ where
             fully_scanned_height: summary.fully_scanned_height().into(),
             next_sapling_subtree_index: summary.next_sapling_subtree_index(),
             next_orchard_subtree_index: summary.next_orchard_subtree_index(),
+            next_ironwood_subtree_index: summary.next_ironwood_subtree_index(),
         }
     }
 }
