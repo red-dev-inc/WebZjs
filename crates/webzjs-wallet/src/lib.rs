@@ -6,8 +6,13 @@
 #[cfg(feature = "wasm")]
 pub mod bindgen;
 
+mod balance;
+mod chain_params;
 mod error;
 pub mod init;
+pub mod memo;
+pub mod network_upgrade;
+pub mod payments;
 pub mod validation;
 
 pub mod wallet;

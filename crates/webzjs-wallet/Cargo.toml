@@ -64,7 +64,7 @@ zcash_proofs = { workspace = true, default-features = false, features = ["bundle
 zip321 = { workspace = true }
 zip32 = { workspace = true }
 pczt = { workspace = true, default-features = false, features = ["orchard", "sapling", "transparent"] }
-orchard = { version = "0.15", default-features = false }
+orchard = { version = "0.16", default-features = false }
 sapling = { workspace = true }
 bip32.workspace = true
 ## gRPC Web dependencies
@@ -76,6 +76,8 @@ tokio.workspace = true
 zcash_client_sqlite = { workspace = true, optional = true }
 
 getrandom = { workspace = true, features = ["js"] }
+getrandom04.workspace = true
+rand10.workspace = true
 thiserror.workspace = true
 indexed_db_futures = "0.5.0"
 sha2 = "0.10"
@@ -99,6 +101,9 @@ http = { version = "1.1.0", default-features = false }
 serde.workspace = true
 postcard = { version = "1.0.10", features = ["alloc"] }
 serde-wasm-bindgen.workspace = true
+
+[dev-dependencies]
+serde_json = "1"
 
 [lints]
 workspace = true

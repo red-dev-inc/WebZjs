@@ -27,6 +27,10 @@ pub enum Error {
     AddressGeneration(#[from] zcash_keys::keys::AddressGenerationError),
     #[error("Error attempting to decode address: {0}")]
     AddressDecoding(#[from] zcash_address::ParseError),
+    #[error("Invalid payments: {0}")]
+    Payments(#[from] crate::payments::PaymentsError),
+    #[error("{0}")]
+    UnsupportedNetworkUpgrade(#[from] crate::network_upgrade::UnsupportedNetworkUpgrade),
     #[error("Error attempting to decode key: {0}")]
     KeyDecoding(String),
     #[error("Invalid network string given: {0}")]
@@ -95,7 +99,29 @@ pub enum Error {
 
 impl From<Error> for JsValue {
     fn from(e: Error) -> Self {
-        js_sys::Error::new(&e.to_string()).into()
+        let js_error = js_sys::Error::new(&e.to_string());
+        let set = |key: &str, value: JsValue| {
+            let _ = js_sys::Reflect::set(&js_error, &key.into(), &value);
+        };
+        match &e {
+            // Typed payment errors carry a stable `code` so callers need not parse the message.
+            Error::Payments(p) => set("code", p.code().into()),
+            // So does the network-upgrade check, with the facts a caller needs to react.
+            Error::UnsupportedNetworkUpgrade(u) => {
+                set(
+                    "code",
+                    crate::network_upgrade::UnsupportedNetworkUpgrade::CODE.into(),
+                );
+                set("chain_branch_id", u.chain_branch_id.as_str().into());
+                set("chain_height", JsValue::from_f64(u.chain_height as f64));
+                set(
+                    "newest_known_upgrade",
+                    u.newest_known_upgrade.as_str().into(),
+                );
+            }
+            _ => {}
+        }
+        js_error.into()
     }
 }
 
