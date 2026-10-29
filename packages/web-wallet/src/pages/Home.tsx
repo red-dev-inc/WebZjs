@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { ZcashYellowPNG, FormTransferSvg, MetaMaskLogoPNG } from '../assets';
+import { ZcashYellowPNG, FormTransferSvg, MetaMaskFoxSvg } from '../assets';
 import { useNavigate } from 'react-router-dom';
 import { useWebZjsContext } from '../context/WebzjsContext';
 import { useMetaMaskContext } from '../context/MetamaskContext';
@@ -152,10 +152,10 @@ const Home: React.FC = () => {
               </div>
             )}
             <div className="ml-3">
-              <img
-                src={MetaMaskLogoPNG}
+              <MetaMaskFoxSvg
                 className="w-[22px] h-[20px]"
-                alt="MetaMask Logo"
+                role="img"
+                aria-label="MetaMask Logo"
               />
             </div>
           </button>
