@@ -1,6 +1,5 @@
 import FormTransferSvg from './form-transfer.svg';
-import MetaMaskLogoPNG from './metaMask-logo.png';
-import MetaMaskSnapsLogoPNG from './metamask-snaps-logo.png';
+import MetaMaskFoxSvg from './MetaMask/MetaMask-icon-fox.svg';
 import ZcashPNG from './zcash.png';
 import ZcashYellowPNG from './zcash-yellow.png';
 
@@ -21,8 +20,7 @@ import CircleSvg from './icons/circle.svg';
 import CircleDashedSvg from './icons/circle-dashed.svg';
 
 export {
-  MetaMaskLogoPNG,
-  MetaMaskSnapsLogoPNG,
+  MetaMaskFoxSvg,
   ZcashPNG,
   ZcashYellowPNG,
   FormTransferSvg,

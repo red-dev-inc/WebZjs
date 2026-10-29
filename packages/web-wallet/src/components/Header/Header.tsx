@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { MetaMaskLogoPNG, MetaMaskSnapsLogoPNG, ZcashPNG } from '../../assets';
+import { ZcashPNG } from '../../assets';
 
 const Header = (): React.JSX.Element => {
   const location = useLocation();
@@ -15,17 +15,9 @@ const Header = (): React.JSX.Element => {
             className="w-[25px] h-[25px] mr-3"
             alt="Zcash logo"
           />
-          <div className="w-full max-w-[200px]">
-            {isHomePage ? (
-              <img src={MetaMaskSnapsLogoPNG} alt={'MetaMaskSnapsLogoSvg'} />
-            ) : (
-              <img
-                src={MetaMaskLogoPNG}
-                className="w-[32px] h-[25px]"
-                alt="MetaMask logo"
-              />
-            )}
-          </div>
+          <span className="text-black text-base font-semibold font-inter whitespace-nowrap">
+            Zcash WebZjs Wallet
+          </span>
         </div>
       </Link>
       {isHomePage ?? (
