@@ -49,7 +49,7 @@ vi.mock('../hooks', () => ({
 vi.mock('../assets', () => ({
   ZcashYellowPNG: 'zcash-logo.png',
   FormTransferSvg: () => <div data-testid="form-transfer-svg" />,
-  MetaMaskLogoPNG: 'metamask-logo.png',
+  MetaMaskFoxSvg: () => <div data-testid="metamask-fox-svg" />,
 }));
 
 // Mock Loader component
@@ -151,7 +151,7 @@ describe('Home', () => {
   it('shows MetaMask logo in button', () => {
     render(<Home />);
 
-    const metamaskLogo = screen.getByAltText('MetaMask Logo');
+    const metamaskLogo = screen.getByTestId('metamask-fox-svg');
     expect(metamaskLogo).toBeInTheDocument();
   });
 
