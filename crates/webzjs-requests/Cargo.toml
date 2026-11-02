@@ -25,6 +25,7 @@ serde-wasm-bindgen.workspace = true
 
 # fixes "failed to resolve: use of undeclared crate or module `imp`" error
 getrandom = { workspace = true, features = ["js"] }
+getrandom04.workspace = true
 
 [lints]
 workspace = true

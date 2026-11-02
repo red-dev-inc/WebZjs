@@ -138,13 +138,17 @@ export function useWebZjsActions(): WebzjsActions {
   const cacheBalanceInSnap = useCallback(async (balanceReport: {
     sapling_balance?: number;
     orchard_balance?: number;
+    ironwood_balance?: number;
     unshielded_balance?: number;
     pending_change?: number;
     pending_spendable?: number;
   } | null, force = false) => {
     if (!balanceReport) return;
 
-    const confirmed = (balanceReport.sapling_balance ?? 0) + (balanceReport.orchard_balance ?? 0);
+    const confirmed =
+      (balanceReport.sapling_balance ?? 0) +
+      (balanceReport.orchard_balance ?? 0) +
+      (balanceReport.ironwood_balance ?? 0);
     const unshielded = balanceReport.unshielded_balance ?? 0;
     const pending = (balanceReport.pending_change ?? 0) + (balanceReport.pending_spendable ?? 0);
     const total = confirmed + unshielded + pending;
