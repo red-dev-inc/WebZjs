@@ -14,7 +14,7 @@ import initWebzJSWallet, {
   WebWallet,
 } from '@zcashcommunitygrants/webzjs-wallet';
 import initWebzJSKeys from '@zcashcommunitygrants/webzjs-keys';
-import { MAINNET_LIGHTWALLETD_PROXY } from '../config/constants';
+import { NETWORK, LIGHTWALLETD_PROXY } from '../config/constants';
 import { Snap } from '../types';
 import toast, { Toaster } from 'react-hot-toast';
 
@@ -118,18 +118,18 @@ export const WebZjsProvider = ({ children }: { children: React.ReactNode }) => {
       if (bytes) {
         console.info('Saved wallet detected. Restoring wallet from storage');
         try {
-          wallet = new WebWallet('main', MAINNET_LIGHTWALLETD_PROXY, 1, 1, bytes);
+          wallet = new WebWallet(NETWORK, LIGHTWALLETD_PROXY, 1, 1, bytes);
         } catch (deserializeError) {
           console.warn(
             'Failed to restore wallet from storage (possibly incompatible format after upgrade). Creating fresh wallet.',
             deserializeError
           );
           toast.error('Wallet data incompatible after upgrade. Please re-sync your wallet.');
-          wallet = new WebWallet('main', MAINNET_LIGHTWALLETD_PROXY, 1, 1, null);
+          wallet = new WebWallet(NETWORK, LIGHTWALLETD_PROXY, 1, 1, null);
         }
       } else {
         console.info('No saved wallet detected. Creating new wallet');
-        wallet = new WebWallet('main', MAINNET_LIGHTWALLETD_PROXY, 1, 1, null);
+        wallet = new WebWallet(NETWORK, LIGHTWALLETD_PROXY, 1, 1, null);
       }
 
       dispatch({ type: 'set-web-wallet', payload: wallet });
