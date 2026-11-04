@@ -3561,6 +3561,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "sha2 0.10.9",
  "subtle",
  "thiserror 1.0.69",
