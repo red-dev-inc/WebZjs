@@ -3859,6 +3859,7 @@ dependencies = [
 [[package]]
 name = "zcash_client_memory"
 version = "0.0.0"
+source = "git+https://github.com/ETIM-PAUL/zcash_client_memory?rev=24e3be417ccfbe4d10d9730aa19e0261385f70d4#24e3be417ccfbe4d10d9730aa19e0261385f70d4"
 dependencies = [
  "async-trait",
  "bip32",
