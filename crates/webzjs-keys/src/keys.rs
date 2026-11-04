@@ -115,7 +115,7 @@ impl UnifiedSpendingKey {
 
     pub fn to_sapling_proof_generation_key(&self) -> ProofGenerationKey {
         ProofGenerationKey {
-            inner: self.inner.sapling().expsk.proof_generation_key(),
+            inner: self.inner.sapling().expsk().proof_generation_key(),
         }
     }
 }
@@ -146,7 +146,9 @@ impl UnifiedFullViewingKey {
     ///
     pub fn encode(&self, network: &str) -> Result<String, Error> {
         let network = Network::from_str(network)?;
-        Ok(self.inner.encode(&network))
+        self.inner
+            .encode(&network)
+            .map_err(|e| Error::KeyEncoding(e.to_string()))
     }
 
     /// Construct a UFVK from its encoded string representation
@@ -161,7 +163,7 @@ impl UnifiedFullViewingKey {
         let network = Network::from_str(network)?;
         Ok(Self {
             inner: zcash_keys::keys::UnifiedFullViewingKey::decode(&network, encoding)
-                .map_err(Error::KeyDecoding)?,
+                .map_err(|e| Error::KeyDecoding(e.to_string()))?,
         })
     }
 
@@ -188,6 +190,17 @@ impl UnifiedFullViewingKey {
             .transparent()
             .map(|addr| zcash_keys::encoding::AddressCodec::encode(addr, &network)))
     }
+
+    /// Default unified (shielded) address for this UFVK, encoded for `network`
+    /// ("main"/"test"). Destination for the v1 → v2 migration sweep.
+    pub fn get_unified_address(&self, network: &str) -> Result<String, Error> {
+        let network = Network::from_str(network)?;
+        let (ua, _) = self
+            .inner
+            .default_address(zcash_keys::keys::UnifiedAddressRequest::ALLOW_ALL)
+            .map_err(|_| Error::TransparentAddressDerivation)?;
+        Ok(ua.encode(&network))
+    }
 }
 
 impl UnifiedFullViewingKey {
@@ -210,4 +223,88 @@ impl UnifiedFullViewingKey {
 pub fn generate_seed_phrase() -> String {
     let mnemonic = <Mnemonic<English>>::generate(Count::Words24);
     mnemonic.phrase().to_string()
+}
+
+/// Encode raw entropy as a standard BIP-39 mnemonic (portable v2 derivation):
+/// 32 bytes → the user's exportable 24-word phrase. Deterministic.
+#[wasm_bindgen]
+pub fn mnemonic_from_entropy(entropy: Box<[u8]>) -> Result<String, Error> {
+    let mnemonic = <Mnemonic<English>>::from_entropy(entropy.into_vec())
+        .map_err(|e| Error::Bip39(e.to_string()))?;
+    Ok(mnemonic.phrase().to_string())
+}
+
+/// Derive the 64-byte BIP-39 seed from a mnemonic (portable v2), using an empty
+/// passphrase so standard wallets reproduce the same account.
+#[wasm_bindgen]
+pub fn seed_from_mnemonic(phrase: &str) -> Result<Vec<u8>, Error> {
+    let mnemonic =
+        <Mnemonic<English>>::from_phrase(phrase).map_err(|e| Error::Bip39(e.to_string()))?;
+    Ok(mnemonic.to_seed("").to_vec())
+}
+
+#[cfg(test)]
+mod portable_derivation_tests {
+    use super::*;
+
+    // Standard BIP-39 test vector: 32 bytes of 0x00 → this exact 24-word phrase.
+    // Confirms our encoding is standard (so other wallets reproduce the account).
+    const ALL_ZERO_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon \
+        abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+        abandon abandon abandon abandon abandon abandon art";
+
+    #[test]
+    fn mnemonic_matches_standard_bip39_vector() {
+        let phrase = mnemonic_from_entropy(vec![0u8; 32].into_boxed_slice()).unwrap();
+        assert_eq!(phrase, ALL_ZERO_PHRASE);
+    }
+
+    #[test]
+    fn derivation_is_deterministic() {
+        let entropy = [7u8; 32];
+        let p1 = mnemonic_from_entropy(Box::new(entropy)).unwrap();
+        let p2 = mnemonic_from_entropy(Box::new(entropy)).unwrap();
+        assert_eq!(p1, p2, "same entropy must give the same phrase");
+
+        let s1 = seed_from_mnemonic(&p1).unwrap();
+        let s2 = seed_from_mnemonic(&p2).unwrap();
+        assert_eq!(s1, s2, "same phrase must give the same seed");
+        assert_eq!(s1.len(), 64, "BIP-39 seed is 64 bytes");
+    }
+
+    #[test]
+    fn roundtrip_entropy_to_portable_usk() {
+        // entropy -> mnemonic -> seed -> USK -> UFVK, twice, must match.
+        let entropy = [0x42u8; 32];
+        let ufvk = |e: [u8; 32]| {
+            let phrase = mnemonic_from_entropy(Box::new(e)).unwrap();
+            let seed = seed_from_mnemonic(&phrase).unwrap();
+            UnifiedSpendingKey::new("main", seed.into_boxed_slice(), 0)
+                .unwrap()
+                .to_unified_full_viewing_key()
+                .encode("main")
+                .unwrap()
+        };
+        assert_eq!(ufvk(entropy), ufvk(entropy), "portable UFVK must be stable");
+    }
+
+    #[test]
+    fn v2_portable_differs_from_v1_raw() {
+        // The whole point of the fix: routing the SAME 32 bytes through BIP-39 (v2)
+        // yields a DIFFERENT account than using them directly as a seed (v1, the bug).
+        let entropy = [0x99u8; 32];
+        let v1 = UnifiedSpendingKey::new("main", Box::new(entropy), 0)
+            .unwrap()
+            .to_unified_full_viewing_key()
+            .encode("main")
+            .unwrap();
+        let phrase = mnemonic_from_entropy(Box::new(entropy)).unwrap();
+        let seed = seed_from_mnemonic(&phrase).unwrap();
+        let v2 = UnifiedSpendingKey::new("main", seed.into_boxed_slice(), 0)
+            .unwrap()
+            .to_unified_full_viewing_key()
+            .encode("main")
+            .unwrap();
+        assert_ne!(v1, v2, "v2 must be a distinct (portable) account from v1");
+    }
 }

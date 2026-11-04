@@ -6,7 +6,7 @@ import { useMetaMask } from './snaps/useMetaMask';
 import { useInvokeSnap } from './snaps/useInvokeSnap';
 import { useRequestSnap } from './snaps/useRequestSnap';
 import { SeedFingerprint, WebWallet } from '@zcashcommunitygrants/webzjs-wallet';
-import { MAINNET_LIGHTWALLETD_PROXY } from '../config/constants';
+import { NETWORK, LIGHTWALLETD_PROXY } from '../config/constants';
 import { SnapState } from '../types/snap';
 
 // Synchronous guard: prevents triggerRescan from overlapping with fullResync.
@@ -80,6 +80,9 @@ export function useWebZjsActions(): WebzjsActions {
     }
 
     const merged: SnapState = {
+      // Preserve any existing fields (e.g. derivationVersion set by completeMigration)
+      // that aren't in the explicit shape below, so a routine state write doesn't wipe them.
+      ...existing,
       webWalletSyncStartBlock: birthday ?? '',
       lastKnownBalance: existing?.lastKnownBalance ?? null,
       hasPendingTx: existing?.hasPendingTx ?? null,
@@ -138,13 +141,17 @@ export function useWebZjsActions(): WebzjsActions {
   const cacheBalanceInSnap = useCallback(async (balanceReport: {
     sapling_balance?: number;
     orchard_balance?: number;
+    ironwood_balance?: number;
     unshielded_balance?: number;
     pending_change?: number;
     pending_spendable?: number;
   } | null, force = false) => {
     if (!balanceReport) return;
 
-    const confirmed = (balanceReport.sapling_balance ?? 0) + (balanceReport.orchard_balance ?? 0);
+    const confirmed =
+      (balanceReport.sapling_balance ?? 0) +
+      (balanceReport.orchard_balance ?? 0) +
+      (balanceReport.ironwood_balance ?? 0);
     const unshielded = balanceReport.unshielded_balance ?? 0;
     const pending = (balanceReport.pending_change ?? 0) + (balanceReport.pending_spendable ?? 0);
     const total = confirmed + unshielded + pending;
@@ -334,42 +341,74 @@ export function useWebZjsActions(): WebzjsActions {
       return;
     }
 
-    // Check if we're already at chain tip - skip redundant syncs
-    // Allow a small buffer (2 blocks) for network propagation
-    const fullySyncedHeight = fullySyncedRef.current;
-    const chainHeight = chainHeightRef.current ? Number(chainHeightRef.current) : 0;
-    if (fullySyncedHeight && chainHeight && fullySyncedHeight >= chainHeight - 2) {
-      // Already synced to chain tip, just refresh the chain height
-      try {
-        const latestBlock = await state.webWallet.get_latest_block();
-        if (latestBlock && latestBlock !== chainHeightRef.current) {
+    const wallet = state.webWallet;
+
+    // Refresh the chain tip up front so we both display it and decide whether a
+    // sync is needed.
+    let chainTip = chainHeightRef.current ? Number(chainHeightRef.current) : 0;
+    try {
+      const latestBlock = await wallet.get_latest_block();
+      if (latestBlock) {
+        if (latestBlock !== chainHeightRef.current) {
           dispatch({ type: 'set-chain-height', payload: latestBlock });
-          // Only sync if chain has advanced
-          if (fullySyncedHeight < Number(latestBlock)) {
-            dispatch({ type: 'set-sync-in-progress', payload: true });
-            try {
-              await withRetry(() => state.webWallet!.sync(), { label: 'sync', retries: 2, baseDelay: 3000 });
-              await syncStateWithWallet();
-              await flushDbToStore();
-            } finally {
-              dispatch({ type: 'set-sync-in-progress', payload: false });
-            }
-          }
         }
-      } catch (err) {
-        console.error('Error checking chain height:', err);
+        chainTip = Number(latestBlock);
       }
+    } catch (err) {
+      console.error('Error checking chain height:', err);
+      return;
+    }
+
+    // Already synced to the chain tip (small buffer for propagation) — nothing to do.
+    const fullySyncedHeight = fullySyncedRef.current;
+    if (fullySyncedHeight && chainTip && fullySyncedHeight >= chainTip - 2) {
       return;
     }
 
     dispatch({ type: 'set-sync-in-progress', payload: true });
 
+    // Sync in short incremental rounds, persisting + refreshing after each, so one
+    // sync() that can't finish the backlog doesn't discard the interval's progress.
+    const MAX_SYNC_ROUNDS = 20;
+    const SYNC_ROUND_DELAY = 2000; // ms between rounds to let the proxy recover
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 4;
+
     try {
-      await withRetry(() => state.webWallet!.sync(), { label: 'sync', retries: 2, baseDelay: 3000 });
-      await syncStateWithWallet();
-      await flushDbToStore();
-    } catch (err: unknown) {
-      console.warn('Sync failed (will retry next interval):', err);
+      for (let round = 1; round <= MAX_SYNC_ROUNDS; round++) {
+        try {
+          await wallet.sync();
+          consecutiveFailures = 0;
+
+          // Persist + refresh after every round so progress survives a later
+          // failure and the UI advances steadily.
+          await syncStateWithWallet();
+          await flushDbToStore();
+
+          const summary = await wallet.get_wallet_summary();
+          const scannedHeight = summary?.fully_scanned_height ?? 0;
+          const tip = Number(await wallet.get_latest_block());
+          if (scannedHeight >= tip - 2) {
+            break; // caught up
+          }
+
+          if (round < MAX_SYNC_ROUNDS) {
+            await new Promise((r) => setTimeout(r, SYNC_ROUND_DELAY));
+          }
+        } catch (syncErr) {
+          consecutiveFailures++;
+          console.warn(
+            `Sync round ${round} failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}); progress is preserved:`,
+            syncErr,
+          );
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            // Give up for now; the next interval resumes from persisted progress.
+            break;
+          }
+          const backoff = SYNC_ROUND_DELAY * Math.pow(2, consecutiveFailures - 1);
+          await new Promise((r) => setTimeout(r, backoff));
+        }
+      }
     } finally {
       dispatch({ type: 'set-sync-in-progress', payload: false });
     }
@@ -445,7 +484,7 @@ export function useWebZjsActions(): WebzjsActions {
 
       // 3. Create fresh wallet in LOCAL variable — old wallet stays in React state + IndexedDB
       console.info('Full resync: Creating fresh wallet (old wallet preserved as fallback)');
-      const freshWallet = new WebWallet('main', MAINNET_LIGHTWALLETD_PROXY, 1, 1, null);
+      const freshWallet = new WebWallet(NETWORK, LIGHTWALLETD_PROXY, 1, 1, null);
 
       // 4. Re-import the account with retry (makes GetTreeState gRPC call)
       console.info(`Full resync: Re-importing account with birthday ${birthdayBlock}`);

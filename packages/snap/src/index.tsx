@@ -14,6 +14,8 @@ import { signPczt } from './rpc/signPczt'
 
 import { assert, object, number, optional, string } from 'superstruct';
 import { getSeedFingerprint } from './rpc/getSeedFingerprint';
+import { exportZcashSecret } from './rpc/exportSecret';
+import { getPortableAddress, completeMigration } from './rpc/migrate';
 import type { OnInstallHandler } from "@metamask/snaps-sdk";
 import { installDialog } from './utils/dialogs';
 
@@ -47,6 +49,12 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request, origin }) => 
       return await signPczt(request.params as SignPcztParams, origin);
     case 'getSeedFingerprint':
       return await getSeedFingerprint();
+    case 'exportZcashSecret':
+      return await exportZcashSecret();
+    case 'getPortableAddress':
+      return await getPortableAddress();
+    case 'completeMigration':
+      return await completeMigration();
     case 'setBirthdayBlock':
       assert(request.params, object({ latestBlock: optional(number()) }));
       return await setBirthdayBlock(request.params as SetBirthdayBlockParams);

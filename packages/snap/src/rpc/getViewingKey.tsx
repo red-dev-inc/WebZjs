@@ -1,18 +1,19 @@
 import { UnifiedSpendingKey } from '@zcashcommunitygrants/webzjs-keys';
-import { getSeed } from '../utils/getSeed';
+import { getSeed, getActiveDerivationVersion } from '../utils/getSeed';
 import { Box, Copyable, Divider, Heading, Text } from '@metamask/snaps-sdk/jsx';
+import { NETWORK } from '../config';
 
 type Network = 'main' | 'test';
 
 export async function getViewingKey(
   origin: string,
-  network: Network = 'main',
+  network: Network = NETWORK,
   accountIndex: number = 0,
 ) {
 
   try {
-    // Retrieve the BIP-44 entropy from MetaMask
-    const seed = await getSeed();
+    // Retrieve the seed for this account's active derivation version
+    const seed = await getSeed(await getActiveDerivationVersion());
 
     // Generate the UnifiedSpendingKey and obtain the Viewing Key
     const spendingKey = new UnifiedSpendingKey(network, seed, accountIndex);

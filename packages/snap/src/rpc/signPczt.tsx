@@ -14,11 +14,10 @@ import {
   pczt_sign,
   Pczt,
 } from '@zcashcommunitygrants/webzjs-keys';
-import { getSeed } from '../utils/getSeed';
+import { getSeed, getActiveDerivationVersion } from '../utils/getSeed';
 import { SignPcztParams } from 'src/types';
+import { NETWORK } from '../config';
 
-/** Network the Snap operates on (coinType 133 = Zcash mainnet). */
-const NETWORK = 'main';
 const ZATS_PER_ZEC = 100_000_000n;
 
 /**
@@ -93,7 +92,7 @@ export async function signPczt(
   const pcztUint8Array = new Uint8Array(Buffer.from(pcztHexTring, 'hex'));
   const pczt = Pczt.from_bytes(pcztUint8Array);
 
-  const seed = await getSeed();
+  const seed = await getSeed(await getActiveDerivationVersion());
   const spendingKey = new UnifiedSpendingKey(NETWORK, seed, 0);
   const seedFp = new SeedFingerprint(seed);
   const ufvk = spendingKey.to_unified_full_viewing_key();

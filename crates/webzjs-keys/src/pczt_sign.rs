@@ -163,6 +163,7 @@ pub async fn pczt_sign_inner(
                 KeyRef::Orchard { index } => {
                     signer
                         .sign_orchard(
+                            rand10::rng(),
                             index,
                             &orchard::keys::SpendAuthorizingKey::from(usk.orchard()),
                         )
@@ -174,6 +175,7 @@ pub async fn pczt_sign_inner(
                     // Ironwood reuses the Orchard spend-authorizing key.
                     signer
                         .sign_ironwood(
+                            rand10::rng(),
                             index,
                             &orchard::keys::SpendAuthorizingKey::from(usk.orchard()),
                         )
@@ -183,7 +185,7 @@ pub async fn pczt_sign_inner(
                 }
                 KeyRef::Sapling { index } => {
                     signer
-                        .sign_sapling(index, &usk.sapling().expsk.ask)
+                        .sign_sapling(rand10::rng(), index, usk.sapling().expsk().ask())
                         .map_err(|e| {
                             Error::PcztSign(format!("Failed to sign Sapling spend {index}: {e:?}"))
                         })?;
