@@ -214,7 +214,7 @@ impl WebWallet {
         birthday_height: Option<u32>,
     ) -> Result<u32, Error> {
         let ufvk = UnifiedFullViewingKey::decode(&self.inner.network, encoded_ufvk)
-            .map_err(Error::KeyParse)?;
+            .map_err(|e| Error::KeyParse(e.to_string()))?;
         let derivation = Some(Zip32Derivation::new(
             seed_fingerprint.into(),
             zip32::AccountId::try_from(account_hd_index)?,
@@ -251,7 +251,7 @@ impl WebWallet {
         birthday_height: Option<u32>,
     ) -> Result<u32, Error> {
         let ufvk = UnifiedFullViewingKey::decode(&self.inner.network, encoded_ufvk)
-            .map_err(Error::KeyParse)?;
+            .map_err(|e| Error::KeyParse(e.to_string()))?;
 
         self.inner
             .import_ufvk(

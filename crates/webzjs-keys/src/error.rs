@@ -10,6 +10,8 @@ pub enum Error {
     Derivation(#[from] zcash_keys::keys::DerivationError),
     #[error("Error attempting to decode key: {0}")]
     KeyDecoding(String),
+    #[error("Error attempting to encode key: {0}")]
+    KeyEncoding(String),
     #[error("Failed to sign Pczt: {0}")]
     PcztSign(String),
     #[error("Failed to describe Pczt: {0}")]
