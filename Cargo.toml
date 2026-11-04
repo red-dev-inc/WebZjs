@@ -7,6 +7,8 @@ members = [
     "crates/webzjs-requests",
     "crates/webzjs-wallet",
 ]
+# A path dependency inside the workspace directory would otherwise become a member.
+exclude = ["vendor/tonic-web-wasm-client"]
 
 [profile.release]
 # Tell `rustc` to optimize for small code size.
@@ -86,6 +88,12 @@ tempfile = "3.12"
 # Used in Native tests
 tokio = { version = "1.0", features = ["rt", "macros"] }
 byte-unit = { version = "5.1.4", features = ["byte"] }
+
+[patch.crates-io]
+# lightwalletd v0.5.4 (Zcash testnet) answers an empty stream with a trailers-only response, which
+# tonic-web-wasm-client 0.8.0 rejects as `MalformedResponse`, so sync fails. See
+# vendor/tonic-web-wasm-client/VENDORED.md. Remove once fixed upstream.
+tonic-web-wasm-client = { path = "vendor/tonic-web-wasm-client" }
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(wasm_bindgen)', 'cfg(wasm_bindgen_unstable_test_coverage)'] }
