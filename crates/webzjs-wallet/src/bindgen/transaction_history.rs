@@ -37,6 +37,97 @@ pub enum TransactionStatusType {
     Expired,
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const HISTORY_TYPES: &'static str = r#"
+/** The memo of one shielded output. `memo_bytes` is always the full 512 bytes as on chain, never trimmed. */
+export interface OutputMemo {
+    pool: "sapling" | "orchard" | "ironwood";
+    /** Output index (Sapling) or action index (Orchard, Ironwood) within the transaction. */
+    output_index: number;
+    /** "received": paid to this account (including its own change). "sent": paid to someone else, readable with the outgoing viewing key. */
+    direction: "received" | "sent";
+    /** Value in zatoshis. */
+    value: number;
+    /** "future" is a ZIP 302 format this library does not decode; "invalid_text" has a text lead byte but is not valid UTF-8. */
+    memo_type: "empty" | "text" | "arbitrary" | "future" | "invalid_text";
+    memo_bytes: Uint8Array;
+    /** Only when memo_type is "text". */
+    memo_text?: string | null;
+}
+
+/** One entry of the transaction history, as returned in `TransactionHistoryResponse.transactions`. */
+export interface TransactionHistoryItem {
+    /** Hex of the txid in internal byte order, i.e. the reverse of what block explorers show. */
+    txid: string;
+    tx_type: TransactionType;
+    value: number;
+    fee?: number | null;
+    block_height?: number | null;
+    confirmations: number;
+    status: TransactionStatusType;
+    /** Decoded text of the text memos in this transaction (joined by newlines). */
+    memo?: string | null;
+    timestamp?: number | null;
+    pool: string;
+    /** Every shielded output the wallet can read, each with its memo type, raw bytes and text. */
+    outputs: OutputMemo[];
+}
+"#;
+
+/// Serialize a byte vector as bytes (a `Uint8Array` in JavaScript) rather than as a list of numbers.
+mod as_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bytes(bytes)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        Vec::<u8>::deserialize(d)
+    }
+}
+
+/// The memo of one shielded output of a transaction, as the wallet can read it.
+///
+/// `memo_bytes` is always the full 512 bytes as on chain, never trimmed (see `crate::memo`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutputMemo {
+    /// `"sapling"`, `"orchard"` or `"ironwood"`.
+    pub pool: String,
+    /// Output index (Sapling) or action index (Orchard, Ironwood) within the transaction.
+    pub output_index: u32,
+    /// `"received"` for an output paid to this account (including its own change), `"sent"` for an
+    /// output paid to someone else that the wallet could decrypt with its outgoing viewing key.
+    pub direction: String,
+    /// Value in zatoshis.
+    pub value: u64,
+    /// `"empty" | "text" | "arbitrary" | "future" | "invalid_text"`.
+    pub memo_type: String,
+    #[serde(with = "as_bytes")]
+    pub memo_bytes: Vec<u8>,
+    /// Decoded text, only when `memo_type` is `"text"`.
+    pub memo_text: Option<String>,
+}
+
+fn output_memo(
+    pool: &str,
+    output_index: u32,
+    direction: &str,
+    value: u64,
+    memo: &zcash_protocol::memo::Memo,
+) -> OutputMemo {
+    let record = crate::memo::MemoRecord::from_memo(memo);
+    OutputMemo {
+        pool: pool.to_string(),
+        output_index,
+        direction: direction.to_string(),
+        value,
+        memo_type: record.kind.as_str().to_string(),
+        memo_bytes: record.bytes,
+        memo_text: record.text,
+    }
+}
+
 /// A single transaction history entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen(inspectable)]
@@ -61,6 +152,8 @@ pub struct TransactionHistoryEntry {
     timestamp: Option<u64>,
     /// Pool type: "sapling", "orchard", "transparent", or "mixed"
     pool: String,
+    /// Every shielded output the wallet can read, each with its memo kind, raw bytes and text.
+    outputs: Vec<OutputMemo>,
 }
 
 #[wasm_bindgen]
@@ -127,7 +220,7 @@ pub struct TransactionHistoryResponse {
 
 #[wasm_bindgen]
 impl TransactionHistoryResponse {
-    #[wasm_bindgen(getter)]
+    #[wasm_bindgen(getter, unchecked_return_type = "TransactionHistoryItem[]")]
     pub fn transactions(&self) -> JsValue {
         serde_wasm_bindgen::to_value(&self.transactions).unwrap_or(JsValue::NULL)
     }
@@ -150,6 +243,7 @@ struct TxAccumulator {
     sent_value: u64,
     fee: Option<u64>,
     memos: Vec<String>,
+    outputs: BTreeMap<(String, u32), OutputMemo>,
     pools: std::collections::HashSet<String>,
     block_height: Option<BlockHeight>,
     status: Option<TransactionStatus>,
@@ -193,6 +287,17 @@ pub fn extract_transaction_history(
         };
         entry.pools.insert(pool.to_string());
 
+        entry.outputs.insert(
+            (pool.to_string(), note.note_id().output_index() as u32),
+            output_memo(
+                pool,
+                note.note_id().output_index() as u32,
+                "received",
+                note.note().value().into_u64(),
+                note.memo(),
+            ),
+        );
+
         // Extract memo text
         if let zcash_protocol::memo::Memo::Text(text) = note.memo() {
             let memo_str = text.to_string();
@@ -226,16 +331,16 @@ pub fn extract_transaction_history(
             zcash_client_backend::wallet::Recipient::External { output_pool, .. } => {
                 match output_pool {
                     zcash_protocol::PoolType::Transparent => "transparent",
-                    zcash_protocol::PoolType::Shielded(
-                        zcash_protocol::ShieldedProtocol::Sapling,
-                    ) => "sapling",
-                    zcash_protocol::PoolType::Shielded(
-                        zcash_protocol::ShieldedProtocol::Orchard,
-                    ) => "orchard",
+                    zcash_protocol::PoolType::Shielded(zcash_protocol::ShieldedPool::Sapling) => {
+                        "sapling"
+                    }
+                    zcash_protocol::PoolType::Shielded(zcash_protocol::ShieldedPool::Orchard) => {
+                        "orchard"
+                    }
                     // NU6.3 Ironwood pool.
-                    zcash_protocol::PoolType::Shielded(
-                        zcash_protocol::ShieldedProtocol::Ironwood,
-                    ) => "ironwood",
+                    zcash_protocol::PoolType::Shielded(zcash_protocol::ShieldedPool::Ironwood) => {
+                        "ironwood"
+                    }
                 }
             }
             zcash_client_backend::wallet::Recipient::EphemeralTransparent { .. } => "transparent",
@@ -251,6 +356,28 @@ pub fn extract_transaction_history(
             }
         };
         entry.pools.insert(pool.to_string());
+
+        // Outputs paid to someone else that we could decrypt. Our own change is already listed
+        // above as a received output, so internal recipients are skipped here.
+        if let (
+            zcash_client_backend::wallet::Recipient::External { .. },
+            zcash_client_memory::SentNoteId::Shielded(note_id),
+        ) = (sent_note.to(), sent_note_id)
+        {
+            let index = note_id.output_index() as u32;
+            entry
+                .outputs
+                .entry((pool.to_string(), index))
+                .or_insert_with(|| {
+                    output_memo(
+                        pool,
+                        index,
+                        "sent",
+                        sent_note.value().into_u64(),
+                        sent_note.memo(),
+                    )
+                });
+        }
 
         // Extract memo from sent note
         if let zcash_protocol::memo::Memo::Text(text) = sent_note.memo() {
@@ -353,6 +480,7 @@ pub fn extract_transaction_history(
                 memo,
                 timestamp,
                 pool,
+                outputs: acc.outputs.into_values().collect(),
             }
         })
         .collect();

@@ -22,3 +22,19 @@ impl From<Proposal> for zcash_client_backend::proposal::Proposal<StandardFeeRule
         proposal.inner
     }
 }
+
+#[wasm_bindgen]
+impl Proposal {
+    /// Total ZIP 317 fee of this proposal, in zatoshis.
+    #[wasm_bindgen(getter)]
+    pub fn fee(&self) -> u64 {
+        crate::payments::summarize_proposal(&self.inner).fee
+    }
+
+    /// What this proposal will do: its fee and, per step, the outputs it pays (address, value,
+    /// memo) and the change it returns to the wallet.
+    #[wasm_bindgen(unchecked_return_type = "ProposalDescription")]
+    pub fn describe(&self) -> JsValue {
+        super::payments::describe(&self.inner)
+    }
+}
