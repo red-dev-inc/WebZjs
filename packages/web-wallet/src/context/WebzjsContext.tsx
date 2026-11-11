@@ -134,6 +134,10 @@ export const WebZjsProvider = ({ children }: { children: React.ReactNode }) => {
 
       dispatch({ type: 'set-web-wallet', payload: wallet });
 
+      // DEV-ONLY: expose the wallet for console inspection (per-pool balances, addresses).
+      if (process.env.NODE_ENV !== 'production')
+        (window as unknown as { __webWallet?: WebWallet }).__webWallet = wallet;
+
       // Retrieve summary (accounts, balances, etc.)
       const summary = await wallet.get_wallet_summary();
       if (summary) {

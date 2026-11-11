@@ -1,24 +1,9 @@
 import { useCallback } from 'react';
 import { useInvokeSnap } from './useInvokeSnap';
 
-/**
- * Cached balance stored in snap state for recovery after cookie/IndexedDB clears.
- */
-export type LastKnownBalance = {
-  shielded: number;     // sapling + orchard (in zats)
-  unshielded: number;   // transparent (in zats)
-  timestamp: number;    // When last updated (ms)
-};
-
-/**
- * Snap persistent state stored via snap_manageState.
- * Uses `| null` instead of optional to match snap's Json-compatible type.
- */
-export interface SnapState {
-  webWalletSyncStartBlock: string;
-  lastKnownBalance: LastKnownBalance | null;
-  hasPendingTx: boolean | null;
-}
+// Single source of truth for the Snap state shape.
+export type { LastKnownBalance, SnapState } from '../../types/snap';
+import type { SnapState } from '../../types/snap';
 
 export const useGetSnapState = () => {
   const invokeSnap = useInvokeSnap();

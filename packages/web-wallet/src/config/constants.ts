@@ -12,8 +12,10 @@ export const LIGHTWALLETD_PROXY =
   process.env.LIGHTWALLETD_PROXY ||
   (NETWORK === 'test' ? TESTNET_PROXY : MAINNET_PROXY);
 
-// Back-compat alias for existing imports.
-export const MAINNET_LIGHTWALLETD_PROXY = LIGHTWALLETD_PROXY;
 export const ZATOSHI_PER_ZEC = 1e8;
 export const RESCAN_INTERVAL = 35000;          // 35s sync interval
 export const NU5_ACTIVATION = 1687104;
+
+// Minimum Snap version; passed to wallet_requestSnaps so an outdated Snap updates on
+// connect instead of failing with "Method not found" on the new RPCs.
+export const REQUIRED_SNAP_VERSION = '1.1.0';

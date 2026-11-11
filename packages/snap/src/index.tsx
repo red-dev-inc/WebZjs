@@ -12,10 +12,11 @@ import { SetBirthdayBlockParams, SignPcztParams, SnapState } from './types';
 import { setSnapState } from './rpc/setSnapState';
 import { signPczt } from './rpc/signPczt'
 
-import { assert, object, number, optional, string } from 'superstruct';
+import { assert, object, number, optional, string, boolean, nullable } from 'superstruct';
 import { getSeedFingerprint } from './rpc/getSeedFingerprint';
 import { exportZcashSecret } from './rpc/exportSecret';
 import { getPortableAddress, completeMigration } from './rpc/migrate';
+import { signMigration, SignMigrationParams } from './rpc/signMigration';
 import type { OnInstallHandler } from "@metamask/snaps-sdk";
 import { installDialog } from './utils/dialogs';
 
@@ -47,22 +48,43 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request, origin }) => 
         }),
       }));
       return await signPczt(request.params as SignPcztParams, origin);
+    case 'signMigration':
+      assert(request.params, object({ pcztHexTring: string() }));
+      return await signMigration(request.params as unknown as SignMigrationParams, origin);
     case 'getSeedFingerprint':
       return await getSeedFingerprint();
     case 'exportZcashSecret':
-      return await exportZcashSecret();
+      return await exportZcashSecret(origin);
     case 'getPortableAddress':
-      return await getPortableAddress();
+      return await getPortableAddress(origin);
     case 'completeMigration':
-      return await completeMigration();
+      return await completeMigration(origin);
     case 'setBirthdayBlock':
-      assert(request.params, object({ latestBlock: optional(number()) }));
+      // latestBlock is required: an absent value put NaN into the sync-start height.
+      assert(request.params, object({ latestBlock: number() }));
       return await setBirthdayBlock(request.params as SetBirthdayBlockParams);
     case 'getSnapStete':
       return await getSnapState();
-    case 'setSnapStete':
-      const setSnapStateParams = request.params as unknown as SnapState;
-      return await setSnapState(setSnapStateParams);
+    case 'setSnapStete': {
+      // Strict schema. derivationVersion is accepted but ignored (preserved by
+      // setSnapState; the switch is gated by completeMigration).
+      assert(
+        request.params,
+        object({
+          webWalletSyncStartBlock: string(),
+          lastKnownBalance: nullable(
+            object({
+              shielded: number(),
+              unshielded: number(),
+              timestamp: number(),
+            }),
+          ),
+          hasPendingTx: nullable(boolean()),
+          derivationVersion: optional(number()),
+        }),
+      );
+      return await setSnapState(request.params as unknown as SnapState);
+    }
     default:
       throw new Error('Method not found.');
   }
@@ -79,6 +101,7 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
             value: event.value,
           },
         });
+        break;
 
       default:
         break;

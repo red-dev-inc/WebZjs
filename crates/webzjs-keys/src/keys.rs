@@ -198,7 +198,7 @@ impl UnifiedFullViewingKey {
         let (ua, _) = self
             .inner
             .default_address(zcash_keys::keys::UnifiedAddressRequest::ALLOW_ALL)
-            .map_err(|_| Error::TransparentAddressDerivation)?;
+            .map_err(|_| Error::AddressDerivation)?;
         Ok(ua.encode(&network))
     }
 }

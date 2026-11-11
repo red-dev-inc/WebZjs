@@ -7,7 +7,7 @@ export const installDialog = async () => {
       type: 'alert',
       content: (
         <Box>
-          <Heading>Thank you for installing Zcash Shielded Wallet snap</Heading>
+          <Heading>Thank you for installing Zcash WebZjs Wallet</Heading>
           <Text>
             This snap utilizes Zcash Web Wallet. Visit Zcash Web Wallet at{' '}
             <Link href="https://webzjs.red.dev/">

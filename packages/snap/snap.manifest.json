@@ -1,5 +1,5 @@
 {
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "WebZjs Snap for Zcash wallet",
   "proposedName": "Zcash WebZjs Wallet",
   "repository": {
@@ -7,7 +7,7 @@
     "url": "https://github.com/ZcashCommunityGrants/WebZjs.git"
   },
   "source": {
-    "shasum": "CAGcWn2ZLrGZthcSubOcsW/tHcOpga3uF3gYpwCKMoU=",
+    "shasum": "CvL0mIg7jA50LolmVNknpSvIDCSDTAivbaAxKecystU=",
     "location": {
       "npm": {
         "filePath": "dist/bundle.js",
@@ -22,11 +22,7 @@
     "endowment:lifecycle-hooks": {},
     "endowment:webassembly": {},
     "endowment:rpc": {
-      "allowedOrigins": [
-        "https://webzjs.red.dev",
-        "http://localhost:3000",
-        "http://app-provider.localhost:3000"
-      ]
+      "allowedOrigins": ["https://webzjs.red.dev"]
     },
     "snap_getBip44Entropy": [
       {

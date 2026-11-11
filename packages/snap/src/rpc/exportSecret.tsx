@@ -22,10 +22,10 @@ type Network = 'main' | 'test';
  * Reveal the account's portable (v2) BIP-39 phrase + viewing key for import into a
  * standard Zcash wallet. SECURITY: shown only in the Snap dialog, never returned to the dApp.
  */
-export async function exportZcashSecret(
-  network: Network = NETWORK,
-  accountIndex: number = 0,
-): Promise<boolean> {
+export async function exportZcashSecret(origin: string): Promise<boolean> {
+  // Hardcoded, not caller-supplied: request.params must not choose network/account.
+  const network: Network = NETWORK;
+  const accountIndex = 0;
   // 1. Confirm-to-reveal. No secret is derived or shown until the user approves.
   const confirmed = await snap.request({
     method: 'snap_dialog',
@@ -36,8 +36,8 @@ export async function exportZcashSecret(
           <Heading>Reveal your Zcash recovery phrase?</Heading>
           <Divider />
           <Text>
-            You are about to reveal the secret recovery phrase for your Zcash
-            wallet. Make sure no one can see your screen.
+            <Bold>{origin}</Bold> requested to reveal the secret recovery phrase
+            for your Zcash wallet. Make sure no one can see your screen.
           </Text>
           <Text>
             <Bold>
@@ -81,8 +81,15 @@ export async function exportZcashSecret(
         <Box>
           <Heading>Your Zcash wallet recovery phrase</Heading>
           <Text>
-            Import these 24 words into another Zcash wallet (e.g. Zkool or Zodl)
-            to access this wallet there. Keep them secret and safe.
+            Import these 24 words into another Zcash wallet (e.g. Zodl or Zkool) to
+            access this wallet there. Keep them secret and safe.
+          </Text>
+          <Text>
+            <Bold>
+              Before you rely on another wallet, confirm it shows your full balance.
+            </Bold>{' '}
+            Some wallets handle change addresses differently and may display only
+            part of your funds after import.
           </Text>
           <Copyable value={mnemonic} sensitive={true} />
           {onLegacy ? (

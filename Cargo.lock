@@ -3833,7 +3833,7 @@ dependencies = [
 [[package]]
 name = "zcash_client_memory"
 version = "0.0.0"
-source = "git+https://github.com/red-dev-inc/zcash_client_memory?branch=feat%2Fsnap-nu7#b4c8f0d33c65c5bab4155ddeba4f201ea2d28c43"
+source = "git+https://github.com/red-dev-inc/zcash_client_memory?rev=b4c8f0d33c65c5bab4155ddeba4f201ea2d28c43#b4c8f0d33c65c5bab4155ddeba4f201ea2d28c43"
 dependencies = [
  "async-trait",
  "bip32",

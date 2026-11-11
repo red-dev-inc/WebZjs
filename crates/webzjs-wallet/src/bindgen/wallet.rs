@@ -504,6 +504,17 @@ impl WebWallet {
             .map(Into::into)
     }
 
+    /// Creates a PCZT that sweeps the account's entire spendable shielded balance to
+    /// `to_address` with an exact fee and no change (the v1 → v2 migration move). Fails if
+    /// any shielded note is not yet spendable; transparent funds must be shielded first.
+    pub async fn pczt_sweep(&self, account_id: u32, to_address: String) -> Result<Pczt, Error> {
+        let to_address = ZcashAddress::try_from_encoded(&to_address)?;
+        self.inner
+            .pczt_sweep(AccountId::from(account_id), to_address)
+            .await
+            .map(Into::into)
+    }
+
     /// Creates and inserts proofs for a PCZT.
     ///
     /// If there are Sapling spends, a ProofGenerationKey needs to be supplied. It can be derived from the UFVK.
@@ -524,7 +535,9 @@ impl WebWallet {
             .map(Into::into)
     }
 
-    pub async fn pczt_send(&self, pczt: Pczt) -> Result<(), Error> {
+    /// Broadcasts the transaction in `pczt` and returns its txid (raw-byte hex), so the
+    /// caller can poll `get_transaction_history` for confirmation.
+    pub async fn pczt_send(&self, pczt: Pczt) -> Result<String, Error> {
         self.inner.pczt_send(pczt.into()).await
     }
 

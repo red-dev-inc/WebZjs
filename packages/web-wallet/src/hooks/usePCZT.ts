@@ -1,5 +1,6 @@
 import { useWebZjsContext } from '../context/WebzjsContext';
 import { Pczt } from '@zcashcommunitygrants/webzjs-wallet';
+import { provePcztInWorker } from '../workers/proverClient';
 import { useInvokeSnap } from './snaps/useInvokeSnap';
 import { zecToZats } from '../utils';
 import { useWebZjsActions } from './useWebzjsActions';
@@ -60,7 +61,9 @@ export const usePczt = (): IUsePczt => {
 
   const provePczt = async (pczt: Pczt): Promise<Pczt> => {
     try {
-      return await state.webWallet!.pczt_prove(pczt);
+      // Prove in a worker: the Sapling Groth16 prover uses Atomics.wait, illegal on main.
+      const provedBytes = await provePcztInWorker(pczt.serialize());
+      return Pczt.from_bytes(provedBytes);
     } catch (error) {
       console.error('Error proving PCZT:', error);
       throw error;

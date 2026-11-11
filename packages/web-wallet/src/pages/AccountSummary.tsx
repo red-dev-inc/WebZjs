@@ -24,7 +24,13 @@ function AccountSummary() {
   const { fullResync } = useWebZjsActions();
   const invokeSnap = useInvokeSnap();
   const [exporting, setExporting] = useState(false);
-  const { migrateToPortable, migrationStatus, migrationError } = useMigration();
+  const {
+    migrateToPortable,
+    finishSwitching,
+    migrationStatus,
+    migrationError,
+    hasPendingMigration,
+  } = useMigration();
 
   // Show the migration prompt only while the account is still on the legacy (v1)
   // derivation. Once switched to the portable account (v2) it is hidden.
@@ -38,10 +44,17 @@ function AccountSummary() {
     const ok = window.confirm(
       'This moves all of your funds from your current (legacy) Zcash account to ' +
         'a new portable account whose recovery phrase you can export. You will ' +
-        'approve the transaction in MetaMask. Continue?',
+        'approve the transaction in MetaMask.\n\n' +
+        'This can take a few minutes and your browser may freeze while the ' +
+        'transaction is being proved — this is normal. Please keep this tab open ' +
+        'and do not close it until the migration finishes. Continue?',
     );
     if (!ok) return;
     await migrateToPortable();
+  };
+
+  const handleFinishSwitching = async () => {
+    await finishSwitching();
   };
 
   // Triggers the Snap's secure reveal dialog. The secret is shown by MetaMask
@@ -138,7 +151,7 @@ function AccountSummary() {
         </div>
         <div className="text-[#595959] text-sm font-inter">
           Reveal your Zcash wallet&apos;s recovery phrase to import this wallet
-          into another Zcash wallet (e.g. Zkool or Zodl). The phrase is shown
+          into another Zcash wallet (e.g. Zodl or Zkool). The phrase is shown
           securely inside MetaMask and is different from your MetaMask Secret
           Recovery Phrase.
         </div>
@@ -160,15 +173,32 @@ function AccountSummary() {
             your funds to a new portable account to get a recovery phrase you can
             import anywhere. This sends a transaction you approve in MetaMask.
           </div>
-          <button
-            onClick={handleMigrate}
-            disabled={migrationInProgress}
-            className="self-start px-4 py-2 bg-black text-white rounded-lg text-sm font-medium disabled:opacity-50"
-          >
-            {migrationInProgress
-              ? migrationStatus
-              : 'Move funds to portable account'}
-          </button>
+          {hasPendingMigration ? (
+            <>
+              <div className="text-amber-700 text-sm font-inter">
+                Your funds were already sent to your portable account, but the
+                switch wasn&apos;t finished. Complete it below — do not migrate
+                again.
+              </div>
+              <button
+                onClick={handleFinishSwitching}
+                disabled={migrationInProgress}
+                className="self-start px-4 py-2 bg-black text-white rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                {migrationInProgress ? migrationStatus : 'Finish switching'}
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleMigrate}
+              disabled={migrationInProgress}
+              className="self-start px-4 py-2 bg-black text-white rounded-lg text-sm font-medium disabled:opacity-50"
+            >
+              {migrationInProgress
+                ? migrationStatus
+                : 'Move funds to portable account'}
+            </button>
+          )}
           {migrationStatus === MigrationStatus.DONE && (
             <div className="text-green-700 text-sm font-inter">
               Migration complete — your funds are now in your portable account.

@@ -1,6 +1,7 @@
 use crate::error::Error;
 use crate::{SeedFingerprint, UnifiedSpendingKey};
 use pczt::roles::signer::Signer;
+use pczt::roles::updater::Updater;
 use pczt::roles::verifier::Verifier;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -48,9 +49,8 @@ pub async fn pczt_sign_inner(
         Orchard {
             index: usize,
         },
-        // NU6.3 Ironwood spends reuse the Orchard spend-authorizing key and ZIP-32
-        // derivation; they are collected and signed exactly like Orchard, only via
-        // the Ironwood bundle / `sign_ironwood`.
+        // Ironwood reuses the Orchard spend-authorizing key and ZIP-32 derivation;
+        // collected and signed like Orchard, via the Ironwood bundle.
         Ironwood {
             index: usize,
         },
@@ -154,6 +154,38 @@ pub async fn pczt_sign_inner(
             })
             .map_err(|e| Error::PcztSign(format!("Invalid PCZT: {e:?}")))?
             .finish();
+
+    // Attach the Sapling proof-generation key: the stateless worker prover has no key,
+    // so the PGK must travel in the PCZT. It grants proving/viewing only, never spend.
+    let sapling_spend_indices: Vec<usize> = keys
+        .values()
+        .flatten()
+        .filter_map(|keyref| match keyref {
+            KeyRef::Sapling { index } => Some(*index),
+            _ => None,
+        })
+        .collect();
+    let pczt = if sapling_spend_indices.is_empty() {
+        pczt
+    } else {
+        let pgk = usk.sapling().expsk().proof_generation_key();
+        Updater::new(pczt)
+            .update_sapling_with(|mut updater| {
+                for index in &sapling_spend_indices {
+                    updater.update_spend_with(*index, |mut spend_updater| {
+                        spend_updater.set_proof_generation_key(pgk.clone())
+                    })?;
+                }
+                Ok(())
+            })
+            .map_err(|e| {
+                Error::PcztSign(format!(
+                    "Failed to attach Sapling proof generation key: {e:?}"
+                ))
+            })?
+            .finish()
+    };
+
     let mut signer = Signer::new(pczt).unwrap();
     //.map_err(|e| anyhow!("Failed to initialize Signer: {:?}", e))?;
     for (_, spends) in keys {

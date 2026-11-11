@@ -6,12 +6,21 @@ import { useMetaMask } from './snaps/useMetaMask';
 import { useInvokeSnap } from './snaps/useInvokeSnap';
 import { useRequestSnap } from './snaps/useRequestSnap';
 import { SeedFingerprint, WebWallet } from '@zcashcommunitygrants/webzjs-wallet';
-import { NETWORK, LIGHTWALLETD_PROXY } from '../config/constants';
+import { NETWORK, LIGHTWALLETD_PROXY, REQUIRED_SNAP_VERSION, NU5_ACTIVATION } from '../config/constants';
 import { SnapState } from '../types/snap';
 
 // Synchronous guard: prevents triggerRescan from overlapping with fullResync.
 // Module-level so it's shared across all hook instances and immune to stale closures.
 let _fullResyncActive = false;
+
+// Max sync passes per sync/resync call before giving up and letting the auto-sync
+// interval continue catching up.
+const MAX_SYNC_ROUNDS = 20;
+
+// Clamp a birthday to >= NU5: nothing shielded exists earlier, so a bogus value
+// (1, NaN) would otherwise scan from near genesis at full CPU.
+const clampBirthdayToNU5 = (b: number | undefined): number | undefined =>
+  b === undefined || !Number.isFinite(b) ? undefined : Math.max(Math.floor(b), NU5_ACTIVATION);
 
 interface SyncOptions {
   skipBalanceCache?: boolean;
@@ -51,7 +60,8 @@ export function useWebZjsActions(): WebzjsActions {
   const { installedSnap } = useMetaMask();
   const { refreshSnapState } = useMetaMaskContext();
   const invokeSnap = useInvokeSnap();
-  const requestSnap = useRequestSnap();
+  // Require a min Snap version so an outdated Snap updates on connect.
+  const requestSnap = useRequestSnap(undefined, REQUIRED_SNAP_VERSION);
 
   // Refs for values read inside triggerRescan but that shouldn't cause it to be recreated
   const fullySyncedRef = useRef(state.summary?.fully_scanned_height);
@@ -369,7 +379,6 @@ export function useWebZjsActions(): WebzjsActions {
 
     // Sync in short incremental rounds, persisting + refreshing after each, so one
     // sync() that can't finish the backlog doesn't discard the interval's progress.
-    const MAX_SYNC_ROUNDS = 20;
     const SYNC_ROUND_DELAY = 2000; // ms between rounds to let the proxy recover
     let consecutiveFailures = 0;
     const MAX_CONSECUTIVE_FAILURES = 4;
@@ -452,10 +461,13 @@ export function useWebZjsActions(): WebzjsActions {
         method: 'getSnapStete',
       })) as SnapState | null;
 
-      // Use custom birthday if provided, otherwise fall back to stored value
-      const birthdayBlock = customBirthday ?? (snapState?.webWalletSyncStartBlock
-        ? Number(snapState.webWalletSyncStartBlock)
-        : undefined);
+      // Use custom birthday if provided, otherwise fall back to stored value.
+      // Clamped to >= NU5 so a bad value can't trigger a scan from near genesis.
+      const birthdayBlock = clampBirthdayToNU5(
+        customBirthday ?? (snapState?.webWalletSyncStartBlock
+          ? Number(snapState.webWalletSyncStartBlock)
+          : undefined),
+      );
 
       // Save the new birthday to snap state if custom one was provided
       if (customBirthday) {
@@ -498,7 +510,6 @@ export function useWebZjsActions(): WebzjsActions {
       //    With many blocks to scan, one sync() call can't finish before the
       //    lightwalletd proxy drops the connection, so we keep calling it.
       console.info('Full resync: Starting sync from birthday');
-      const MAX_SYNC_ROUNDS = 20;
       const SYNC_ROUND_DELAY = 2000; // ms between rounds to let proxy recover
       let consecutiveFailures = 0;
       const MAX_CONSECUTIVE_FAILURES = 4;
@@ -619,6 +630,9 @@ export function useWebZjsActions(): WebzjsActions {
       // Store for future (read-merge-write preserves lastKnownBalance)
       await updateSnapState({ webWalletSyncStartBlock: String(birthdayBlock) });
     }
+
+    // Never scan below NU5, even from a bad stored birthday.
+    birthdayBlock = clampBirthdayToNU5(birthdayBlock);
 
     // 3. Create account with recovered credentials
     const accountId = await state.webWallet.create_account_ufvk(

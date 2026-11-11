@@ -98,11 +98,14 @@ mod tests {
     fn mainnet_change_pool_before_and_after_nu6_3() {
         let net = Network::MainNetwork;
         let nu6_3 = net.activation_height(NetworkUpgrade::Nu6_3).unwrap();
+        let nu7 = net.activation_height(NetworkUpgrade::Nu7).unwrap();
         assert_eq!(u32::from(nu6_3), 3_428_143);
+        assert_eq!(u32::from(nu7), 3_543_405);
         assert_eq!(change_pool_at(&net, nu6_3 - 1), ShieldedPool::Orchard);
         assert_eq!(change_pool_at(&net, nu6_3), ShieldedPool::Ironwood);
-        // Mainnet has no NU7 height yet; the pool does not depend on it.
-        assert_eq!(net.activation_height(NetworkUpgrade::Nu7), None);
+        assert_eq!(change_pool_at(&net, nu7 - 1), ShieldedPool::Ironwood);
+        // NU7 keeps the Ironwood pool.
+        assert_eq!(change_pool_at(&net, nu7), ShieldedPool::Ironwood);
         assert_eq!(change_pool_at(&net, h(4_000_000)), ShieldedPool::Ironwood);
     }
 

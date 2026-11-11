@@ -32,4 +32,7 @@ export interface SnapState {
   webWalletSyncStartBlock: string;
   lastKnownBalance: LastKnownBalance | null;
   hasPendingTx: boolean | null;
+  // Key-derivation version for this account. Absent → legacy v1. Set to 2 by the
+  // Snap's completeMigration; the dApp cannot change it (see snap setSnapState.tsx).
+  derivationVersion?: 1 | 2;
 }

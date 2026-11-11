@@ -86,8 +86,9 @@ export async function signPczt(
   { pcztHexTring, signDetails }: SignPcztParams,
   origin: string,
 ): Promise<string> {
-  if (!/^[0-9a-fA-F]+$/.test(pcztHexTring)) {
-    throw new Error('pcztHexTring must be valid hex');
+  // Odd-length hex would be silently truncated by Buffer.from.
+  if (!/^[0-9a-fA-F]+$/.test(pcztHexTring) || pcztHexTring.length % 2 !== 0) {
+    throw new Error('pcztHexTring must be valid, even-length hex');
   }
   const pcztUint8Array = new Uint8Array(Buffer.from(pcztHexTring, 'hex'));
   const pczt = Pczt.from_bytes(pcztUint8Array);
@@ -129,14 +130,16 @@ export async function signPczt(
     0n,
   );
 
-  // Defense-in-depth: compare the site's claim against the verified output.
-  // The amount is authoritative; the recipient is shown for the user to eyeball
-  // (a full Unified Address won't string-match our orchard-only re-encoding).
+  // Defense-in-depth: compare the site's claim against what the PCZT actually does.
   const claimedZats = zecToZats(signDetails.amount);
   const amountMatches = claimedZats === verifiedOutgoing;
-  const recipientMatches = recipientOutputs.some(
-    (o) => o.recipient === signDetails.recipient,
-  );
+
+  // Warn on extra outputs: a split payment can match the claimed total while routing
+  // value to an attacker, so the aggregate amount check alone is not enough.
+  const multiplePayments = recipientOutputs.length > 1;
+
+  // No recipient string-match warning: a full UA never equals our per-pool re-encoding,
+  // so it false-fires on every send. Recipients are shown; extras are caught above.
 
   const verifiedSection = summary.outputs.flatMap((o) => [
     <Text>
@@ -168,13 +171,20 @@ export async function signPczt(
         pool boundary exposes the transfer amount; approving is your consent to make
         it public.
       </Text>
-      {migration.to_self ? (
+      {migration.to_self && migration.is_clean_path_a ? (
         <Text>✓ Destination is your own wallet (self-migration).</Text>
-      ) : (
+      ) : !migration.to_self ? (
         <Text>
           ⚠ <Bold>WARNING: this does NOT migrate to your own wallet.</Bold> The
           Ironwood funds go to another address. Do not approve unless you intend to
           send them away.
+        </Text>
+      ) : (
+        <Text>
+          ⚠ <Bold>WARNING: this is not a clean self-migration.</Bold> Besides the
+          migration to your own wallet, this transaction carries additional
+          payments. Check every "Pays:" line above and do not approve unless you
+          intend them.
         </Text>
       )}
       <Divider />
@@ -208,13 +218,19 @@ export async function signPczt(
       ) : (
         <Text> </Text>
       )}
-      {!recipientMatches ? (
+      {multiplePayments ? (
         <Text>
-          ⚠ Confirm the verified recipient above matches who you intended to pay.
+          ⚠ <Bold>WARNING</Bold>: this transaction has{' '}
+          {String(recipientOutputs.length)} separate payments, but the site
+          described a single recipient. Check every "Pays:" line above — funds may
+          be going somewhere you did not intend.
         </Text>
       ) : (
         <Text> </Text>
       )}
+      <Text>
+        Confirm the verified recipient(s) above match who you intended to pay.
+      </Text>
       <Divider />
       <Text>Raw PCZT</Text>
       <Copyable value={pcztHexTring} />

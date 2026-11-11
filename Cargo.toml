@@ -32,13 +32,13 @@ console_error_panic_hook = { version = "0.1.7" }
 tonic-web-wasm-client = "0.8.0"
 tokio_with_wasm = { version = "0.7.1", features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }
 
-## Zcash dependencies: librustzcash NU7 final stable crates from crates.io (pinned exactly). NU7 is
-## active on testnet from block 4,465,026 (branch id 0x77190AD9); mainnet has no NU7 height yet.
-## `zcash_client_memory` is our NU7 store branch (red-dev-inc `feat/snap-nu7`). For local store work,
-## swap it to `{ path = "../zcash_client_memory" }`.
+## Zcash dependencies: librustzcash NU7 final stable crates from crates.io (pinned exactly). NU7
+## activates on testnet at block 4,465,026 and on mainnet at block 3,543,405 (branch id 0x77190AD9).
+## `zcash_client_memory` is our NU7 store (red-dev-inc `feat/snap-nu7`), pinned by exact revision so
+## `cargo update` can't silently move it. For local store work, swap it to `{ path = "../zcash_client_memory" }`.
 zcash_keys = { version = "=0.17.0", features = ["transparent-inputs", "orchard", "sapling", "unstable"] }
 zcash_client_backend = { version = "=0.25.0", default-features = false, features = ["sync", "lightwalletd-tonic", "orchard", "zeroize"] }
-zcash_client_memory = { git = "https://github.com/red-dev-inc/zcash_client_memory", branch = "feat/snap-nu7", features = ["orchard", "transparent-inputs"] }
+zcash_client_memory = { git = "https://github.com/red-dev-inc/zcash_client_memory", rev = "b4c8f0d33c65c5bab4155ddeba4f201ea2d28c43", features = ["orchard", "transparent-inputs"] }
 zcash_primitives = { version = "=0.31.0" }
 zcash_transparent = { version = "=0.11.0", default-features = false }
 zcash_address = { version = "=0.14.0" }

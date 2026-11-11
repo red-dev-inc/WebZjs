@@ -22,6 +22,8 @@ pub enum Error {
     SeedFingerprint,
     #[error("Failed to derive transparent address from UFVK")]
     TransparentAddressDerivation,
+    #[error("Failed to derive unified address from UFVK")]
+    AddressDerivation,
     #[error("BIP-39 error: {0}")]
     Bip39(String),
 }

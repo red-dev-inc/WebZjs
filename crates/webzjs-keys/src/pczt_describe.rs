@@ -598,7 +598,9 @@ fn analyze(
                     // `is_change` here already means "pays one of our transparent
                     // keys", i.e. ours.
                     is_ours: is_change,
-                    verified: true,
+                    // Unrecoverable (non-standard) script has no displayable recipient,
+                    // so mark it unverified for pczt_validate_inner to refuse.
+                    verified: addr.is_some(),
                 });
             }
             Ok(())

@@ -47,12 +47,11 @@ async function getEntropyBytes(): Promise<Uint8Array> {
 }
 
 /**
- * Derive the ZIP-32 seed for `version` (defaults to legacy v1 so existing funds are
- * unaffected). Returns 32 bytes for v1, a 64-byte BIP-39 seed for v2.
+ * Derive the ZIP-32 seed for `version`. Returns 32 bytes for v1, a 64-byte BIP-39
+ * seed for v2. The caller must pass the version explicitly: a forgotten argument
+ * should be a type error, not a silent fall-through to the wrong key.
  */
-export async function getSeed(
-  version: DerivationVersion = LEGACY_DERIVATION_VERSION,
-): Promise<Uint8Array> {
+export async function getSeed(version: DerivationVersion): Promise<Uint8Array> {
   const entropy = await getEntropyBytes();
 
   if (version === LEGACY_DERIVATION_VERSION) {

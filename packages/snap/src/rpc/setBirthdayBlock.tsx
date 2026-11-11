@@ -107,7 +107,8 @@ export async function setBirthdayBlock({
     method: 'snap_manageState',
     params: {
       operation: 'update',
-      newState: { ...existing, webWalletSyncStartBlock },
+      // Stored as a string to match the SnapState contract and the web wallet.
+      newState: { ...existing, webWalletSyncStartBlock: String(webWalletSyncStartBlock) },
     },
   });
 
