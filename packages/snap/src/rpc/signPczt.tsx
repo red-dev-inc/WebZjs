@@ -12,6 +12,7 @@ import {
   pczt_describe,
   pczt_validate,
   pczt_sign,
+  decode_address_receivers,
   Pczt,
 } from '@zcashcommunitygrants/webzjs-keys';
 import { getSeed, getActiveDerivationVersion } from '../utils/getSeed';
@@ -138,6 +139,34 @@ export async function signPczt(
   // value to an attacker, so the aggregate amount check alone is not enough.
   const multiplePayments = recipientOutputs.length > 1;
 
+  // Verify the claimed recipient against the PCZT: decode the site's address into its
+  // per-pool receivers and confirm every non-change output pays one of them. An
+  // undecodable address leaves this unverifiable — fall back to an eyeball prompt.
+  let claimedReceivers:
+    | { orchard: string | null; sapling: string | null; transparent: string | null }
+    | null = null;
+  try {
+    claimedReceivers = JSON.parse(
+      decode_address_receivers(NETWORK, signDetails.recipient),
+    );
+  } catch {
+    claimedReceivers = null;
+  }
+  const recipientVerifiable = claimedReceivers !== null;
+  const recipientMismatch =
+    recipientVerifiable &&
+    recipientOutputs.some((o) => {
+      const claimed =
+        o.pool === 'orchard'
+          ? claimedReceivers!.orchard
+          : o.pool === 'sapling'
+            ? claimedReceivers!.sapling
+            : o.pool === 'transparent'
+              ? claimedReceivers!.transparent
+              : null;
+      return !claimed || o.recipient !== claimed;
+    });
+
   // No recipient string-match warning: a full UA never equals our per-pool re-encoding,
   // so it false-fires on every send. Recipients are shown; extras are caught above.
 
@@ -228,9 +257,19 @@ export async function signPczt(
       ) : (
         <Text> </Text>
       )}
-      <Text>
-        Confirm the verified recipient(s) above match who you intended to pay.
-      </Text>
+      {!recipientVerifiable ? (
+        <Text>
+          Confirm the verified recipient(s) above match who you intended to pay.
+        </Text>
+      ) : recipientMismatch ? (
+        <Text>
+          ⚠ <Bold>WARNING: the PCZT pays a different address than the site
+          requested.</Bold> Do not approve unless you recognise the verified
+          recipient(s) above.
+        </Text>
+      ) : (
+        <Text>✓ Recipient matches the address the site requested.</Text>
+      )}
       <Divider />
       <Text>Raw PCZT</Text>
       <Copyable value={pcztHexTring} />

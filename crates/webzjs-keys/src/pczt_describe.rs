@@ -24,7 +24,7 @@ use wasm_bindgen::prelude::*;
 use orchard::keys::{FullViewingKey as OrchardFvk, Scope};
 use pczt::roles::verifier::Verifier;
 use webzjs_common::{pool, MigrationSummary, Network, Pczt, PcztOutputSummary, PcztSummary};
-use zcash_keys::address::UnifiedAddress;
+use zcash_keys::address::{Address, UnifiedAddress};
 use zcash_keys::encoding::AddressCodec;
 use zcash_transparent::address::TransparentAddress;
 use zcash_transparent::keys::AccountPubKey;
@@ -196,6 +196,39 @@ fn encode_orchard(network: &Network, addr: &orchard::Address) -> Option<String> 
 /// Encode a Sapling receiver as a Unified Address string for display.
 fn encode_sapling(network: &Network, addr: &sapling::PaymentAddress) -> Option<String> {
     UnifiedAddress::from_receivers(None, Some(*addr), None, None, None).map(|ua| ua.encode(network))
+}
+
+/// Decode a claimed recipient address into its per-pool receiver encodings, matching
+/// exactly how `pczt_describe` encodes output recipients. Lets the signing dialog verify
+/// the site's claimed recipient against the PCZT's real outputs instead of trusting a
+/// plain string. Returns a JSON object `{orchard, sapling, transparent}` (null if absent).
+#[wasm_bindgen]
+pub fn decode_address_receivers(network: &str, address: &str) -> Result<String, Error> {
+    let net = Network::from_str(network)?;
+    let addr = Address::decode(&net, address)
+        .ok_or_else(|| Error::KeyDecoding("could not decode recipient address".into()))?;
+    let (orchard, sapling, transparent) = match addr {
+        Address::Unified(ua) => (
+            ua.orchard().and_then(|a| encode_orchard(&net, a)),
+            ua.sapling().and_then(|a| encode_sapling(&net, a)),
+            ua.transparent().map(|a| a.encode(&net)),
+        ),
+        Address::Sapling(a) => (None, encode_sapling(&net, &a), None),
+        Address::Transparent(a) => (None, None, Some(a.encode(&net))),
+        _ => (None, None, None),
+    };
+    // Address encodings are bech32m/base58 (no quotes or backslashes), so direct
+    // interpolation is safe.
+    let field = |v: &Option<String>| match v {
+        Some(s) => format!("\"{s}\""),
+        None => "null".to_string(),
+    };
+    Ok(format!(
+        "{{\"orchard\":{},\"sapling\":{},\"transparent\":{}}}",
+        field(&orchard),
+        field(&sapling),
+        field(&transparent),
+    ))
 }
 
 /// True iff this Orchard spend is recoverable under `ofvk`.

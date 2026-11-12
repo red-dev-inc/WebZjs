@@ -8,9 +8,10 @@ import { useMetaMaskContext } from '../context/MetamaskContext';
 import { useInvokeSnap } from './snaps/useInvokeSnap';
 import { useWebZjsActions } from './useWebzjsActions';
 import useBalance from './useBalance';
+import { SnapState } from '../types/snap';
 
-// IndexedDB key: the txid of a broadcast-but-not-yet-committed migration sweep.
-// Its presence means "a sweep is in flight; finish the switch, don't start a new one."
+// Key for the txid of a broadcast-but-not-yet-committed migration sweep. Stored in both
+// IndexedDB (fast) and Snap state (durable — survives clearing browser site data).
 const PENDING_MIGRATION_TXID_KEY = 'pendingMigrationTxid';
 
 // How long to wait for the sweep to be mined before giving up (the switch can still
@@ -64,16 +65,62 @@ export const useMigration = (): IUseMigration => {
   const [migrationError, setMigrationError] = useState<string | null>(null);
   const [hasPendingMigration, setHasPendingMigration] = useState(false);
 
+  // Mirror the pending marker into Snap state so it survives clearing site data (which
+  // wipes IndexedDB) and a reload on the same device can still finish the switch.
+  const writePendingToSnap = async (txid: string | null): Promise<void> => {
+    try {
+      const existing = (await invokeSnap({
+        method: 'getSnapStete',
+      })) as SnapState | null;
+      await invokeSnap({
+        method: 'setSnapStete',
+        params: {
+          webWalletSyncStartBlock: existing?.webWalletSyncStartBlock ?? '',
+          lastKnownBalance: existing?.lastKnownBalance ?? null,
+          hasPendingTx: existing?.hasPendingTx ?? null,
+          pendingMigrationTxid: txid,
+        },
+      });
+    } catch {
+      /* Snap unavailable — the IndexedDB marker still covers the common path. */
+    }
+  };
+
+  const setPendingTxid = async (txid: string): Promise<void> => {
+    await set(PENDING_MIGRATION_TXID_KEY, txid).catch(() => undefined);
+    await writePendingToSnap(txid);
+    setHasPendingMigration(true);
+  };
+
+  const clearPendingTxid = async (): Promise<void> => {
+    await del(PENDING_MIGRATION_TXID_KEY).catch(() => undefined);
+    await writePendingToSnap(null);
+    setHasPendingMigration(false);
+  };
+
+  // Snap state first (durable), then IndexedDB (fast local cache).
+  const getPendingTxid = async (): Promise<string | undefined> => {
+    try {
+      const s = (await invokeSnap({ method: 'getSnapStete' })) as SnapState | null;
+      if (s?.pendingMigrationTxid) return s.pendingMigrationTxid;
+    } catch {
+      /* fall through to idb */
+    }
+    try {
+      const t = (await get(PENDING_MIGRATION_TXID_KEY)) as string | undefined;
+      return t || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   // On mount, surface any in-flight migration so the UI can offer "Finish switching".
   useEffect(() => {
     (async () => {
-      try {
-        const txid = (await get(PENDING_MIGRATION_TXID_KEY)) as string | undefined;
-        setHasPendingMigration(!!txid);
-      } catch {
-        /* idb unavailable — treat as no pending migration */
-      }
+      const txid = await getPendingTxid();
+      setHasPendingMigration(!!txid);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const activeAccount = (): number | null =>
@@ -105,6 +152,9 @@ export const useMigration = (): IUseMigration => {
           const entry = txs.find((t) => t.txid === txid);
           if (entry) {
             if (entry.status === 'Expired') {
+              // Clear the marker so "migrate again" starts fresh instead of
+              // resuming this dead transaction forever.
+              await clearPendingTxid();
               throw new Error(
                 'The migration transaction expired before it was mined. Your ' +
                   'funds are still in your legacy account — please migrate again.',
@@ -148,8 +198,7 @@ export const useMigration = (): IUseMigration => {
       return;
     }
 
-    await del(PENDING_MIGRATION_TXID_KEY).catch(() => undefined);
-    setHasPendingMigration(false);
+    await clearPendingTxid();
 
     setMigrationStatus(MigrationStatus.RESYNCING);
     await fullResync();
@@ -174,12 +223,7 @@ export const useMigration = (): IUseMigration => {
       setMigrationError('No active account.');
       return;
     }
-    let txid: string | undefined;
-    try {
-      txid = (await get(PENDING_MIGRATION_TXID_KEY)) as string | undefined;
-    } catch {
-      /* fall through to the no-pending message */
-    }
+    const txid = await getPendingTxid();
     if (!txid) {
       setMigrationError('There is no migration to finish.');
       return;
@@ -210,12 +254,7 @@ export const useMigration = (): IUseMigration => {
 
     // Resume instead of re-sweeping: if a sweep is already in flight, finishing the
     // switch is the right action (a second sweep would fail — v1 is already empty).
-    let pendingTxid: string | undefined;
-    try {
-      pendingTxid = (await get(PENDING_MIGRATION_TXID_KEY)) as string | undefined;
-    } catch {
-      /* idb unavailable; proceed as a fresh migration */
-    }
+    const pendingTxid = await getPendingTxid();
     if (pendingTxid) {
       try {
         await resume(account, pendingTxid);
@@ -292,8 +331,7 @@ export const useMigration = (): IUseMigration => {
 
       // Record the in-flight sweep BEFORE waiting, so a reload can resume it. The
       // switch is NOT committed yet — only after the sweep actually mines.
-      await set(PENDING_MIGRATION_TXID_KEY, txid).catch(() => undefined);
-      setHasPendingMigration(true);
+      await setPendingTxid(txid);
 
       // Wait for the sweep to be mined (not just broadcast) before switching. If it
       // expires or is dropped, we stay on v1 rather than switching to an empty v2.

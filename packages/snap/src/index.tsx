@@ -81,6 +81,7 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request, origin }) => 
           ),
           hasPendingTx: nullable(boolean()),
           derivationVersion: optional(number()),
+          pendingMigrationTxid: optional(nullable(string())),
         }),
       );
       return await setSnapState(request.params as unknown as SnapState);

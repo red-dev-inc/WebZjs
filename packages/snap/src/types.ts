@@ -32,4 +32,6 @@ export type SnapState = {
   // Key-derivation version for this account (see utils/getSeed.ts).
   // Absent → legacy v1 (never silently switch an existing account).
   derivationVersion?: number;
+  // Txid of an in-flight migration sweep (durable mirror of the dApp's IndexedDB marker).
+  pendingMigrationTxid?: string | null;
 } & Record<string, Json>;
