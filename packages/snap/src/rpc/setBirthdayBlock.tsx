@@ -18,9 +18,9 @@ type SetBirthdayBlockParams = { latestBlock: number };
 export async function setBirthdayBlock({
   latestBlock,
 }: SetBirthdayBlockParams): Promise<number | null> {
-  // Calculate approximate block heights for different time ranges
-  // Zcash produces ~576 blocks per day (1 block per 75 seconds)
-  const blocksPerDay = 576;
+  // Approximate block heights for the time-range hints. NU7 (ZIP 218) sets 25s
+  // blocks → ~3,456/day. For spans predating NU7 this errs earlier (safe: scans more).
+  const blocksPerDay = 3456;
   const oneMonthAgo = Math.max(latestBlock - blocksPerDay * 30, 1687104);
   const sixMonthsAgo = Math.max(latestBlock - blocksPerDay * 180, 1687104);
   const oneYearAgo = Math.max(latestBlock - blocksPerDay * 365, 1687104);

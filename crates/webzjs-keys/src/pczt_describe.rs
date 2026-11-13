@@ -78,8 +78,9 @@ pub fn pczt_validate(
 // crafted spoof PCZTs without a browser. See tests/spoof_pczt.rs.
 // ---------------------------------------------------------------------------
 
-/// ZIP-317 marginal fee per logical action, in zatoshis.
-const MARGINAL_FEE: u64 = 5_000;
+/// Lower-bound marginal fee per logical action, in zatoshis. Uses the ZIP 2009
+/// (ZIP-317 Rev 2) value so this floor accepts both pre- and post-reduction fees.
+const MARGINAL_FEE: u64 = 1_000;
 /// ZIP-317 grace: the conventional fee covers at least this many logical actions.
 const GRACE_ACTIONS: u64 = 2;
 /// Defense-in-depth ceiling: a fee more than this multiple of the ZIP-317

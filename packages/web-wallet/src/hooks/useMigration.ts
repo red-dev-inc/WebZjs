@@ -15,9 +15,10 @@ import { SnapState } from '../types/snap';
 const PENDING_MIGRATION_TXID_KEY = 'pendingMigrationTxid';
 
 // How long to wait for the sweep to be mined before giving up (the switch can still
-// be finished later via `finishSwitching`). Poll roughly every 8s.
+// be finished later via `finishSwitching`). Poll roughly every 8s. Budget set for
+// NU7's 25s blocks, where tx expiry arrives sooner in wall-clock (~17 min).
 const MINED_POLL_MS = 8_000;
-const MINED_MAX_ATTEMPTS = 75; // ~10 minutes
+const MINED_MAX_ATTEMPTS = 120; // ~16 minutes
 
 export enum MigrationStatus {
   IDLE = 'Idle',
