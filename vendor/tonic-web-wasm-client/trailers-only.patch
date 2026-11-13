@@ -1,0 +1,68 @@
+Only in a: .cargo_vcs_info.json
+Only in a: Cargo.toml.orig
+diff -ru a/src/call.rs b/src/call.rs
+--- a/src/call.rs	2006-07-24 02:21:28
++++ b/src/call.rs	2026-10-13 19:20:48
+@@ -31,7 +31,8 @@
+     let content_type = content_type.ok_or(Error::MissingContentTypeHeader)?;
+     let body_stream = response.body().ok_or(Error::MissingResponseBody)?;
+ 
+-    let body = ResponseBody::new(body_stream, &content_type, abort)?;
++    let trailers_only = response.headers().has("grpc-status").unwrap_or(false);
++    let body = ResponseBody::new(body_stream, &content_type, abort, trailers_only)?;
+ 
+     result.body(body).map_err(Into::into)
+ }
+diff -ru a/src/response_body.rs b/src/response_body.rs
+--- a/src/response_body.rs	2006-07-24 02:21:28
++++ b/src/response_body.rs	2026-10-13 19:20:59
+@@ -115,6 +115,9 @@
+     trailer: Option<HeaderMap>,
+     state: ReadState,
+     finished_stream: bool,
++    /// Whether the response headers carried `grpc-status`, i.e. the server sent a
++    /// "trailers-only" response (status in the HTTP headers, no body frames).
++    trailers_only: bool,
+ }
+ 
+ impl ResponseBody {
+@@ -122,6 +125,7 @@
+         body_stream: ReadableStream,
+         content_type: &str,
+         abort: AbortGuard,
++        trailers_only: bool,
+     ) -> Result<Self, Error> {
+         let body_stream =
+             wasm_streams::ReadableStream::from_raw(body_stream.unchecked_into()).into_stream();
+@@ -134,6 +138,7 @@
+             trailer: None,
+             state: ReadState::CompressionFlag,
+             finished_stream: false,
++            trailers_only,
+         })
+     }
+ 
+@@ -303,6 +308,15 @@
+                 // If we finished reading data continue return `None`
+                 return Poll::Ready(None);
+             } else if self.finished_stream {
++                // A trailers-only response carries its status in the HTTP headers and has an empty
++                // body: the stream legitimately ends before any frame header.
++                if self.trailers_only
++                    && self.state == ReadState::CompressionFlag
++                    && self.buf.is_empty()
++                    && self.incomplete_data.is_empty()
++                {
++                    return Poll::Ready(None);
++                }
+                 // If stream is finished but data is not finished return error
+                 return Poll::Ready(Some(Err(Error::MalformedResponse)));
+             }
+@@ -324,6 +338,7 @@
+             trailer: None,
+             state: ReadState::Done,
+             finished_stream: true,
++            trailers_only: false,
+         }
+     }
+ }

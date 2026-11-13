@@ -5,6 +5,12 @@ export function setSyncBlockHeight(
   userInputCreationBlock: string | null,
   latestBlock: number,
 ): number {
+  // Guard a bogus chain tip (1, NaN, negative): never start the scan below NU5, or
+  // the wallet scans from genesis at full CPU — a persisted denial of service.
+  if (!Number.isInteger(latestBlock) || latestBlock < NU5_ACTIVATION) {
+    return NU5_ACTIVATION;
+  }
+
   //In case input was empty, default to latestBlock
   if (userInputCreationBlock === null) return latestBlock;
 

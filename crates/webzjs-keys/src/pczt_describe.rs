@@ -24,7 +24,7 @@ use wasm_bindgen::prelude::*;
 use orchard::keys::{FullViewingKey as OrchardFvk, Scope};
 use pczt::roles::verifier::Verifier;
 use webzjs_common::{pool, MigrationSummary, Network, Pczt, PcztOutputSummary, PcztSummary};
-use zcash_keys::address::UnifiedAddress;
+use zcash_keys::address::{Address, UnifiedAddress};
 use zcash_keys::encoding::AddressCodec;
 use zcash_transparent::address::TransparentAddress;
 use zcash_transparent::keys::AccountPubKey;
@@ -78,8 +78,9 @@ pub fn pczt_validate(
 // crafted spoof PCZTs without a browser. See tests/spoof_pczt.rs.
 // ---------------------------------------------------------------------------
 
-/// ZIP-317 marginal fee per logical action, in zatoshis.
-const MARGINAL_FEE: u64 = 5_000;
+/// Lower-bound marginal fee per logical action, in zatoshis. Uses the ZIP 2009
+/// (ZIP-317 Rev 2) value so this floor accepts both pre- and post-reduction fees.
+const MARGINAL_FEE: u64 = 1_000;
 /// ZIP-317 grace: the conventional fee covers at least this many logical actions.
 const GRACE_ACTIONS: u64 = 2;
 /// Defense-in-depth ceiling: a fee more than this multiple of the ZIP-317
@@ -190,12 +191,45 @@ pub fn pczt_validate_inner(
 
 /// Encode an Orchard receiver as a Unified Address string for display.
 fn encode_orchard(network: &Network, addr: &orchard::Address) -> Option<String> {
-    UnifiedAddress::from_receivers(Some(*addr), None, None).map(|ua| ua.encode(network))
+    UnifiedAddress::from_receivers(Some(*addr), None, None, None, None).map(|ua| ua.encode(network))
 }
 
 /// Encode a Sapling receiver as a Unified Address string for display.
 fn encode_sapling(network: &Network, addr: &sapling::PaymentAddress) -> Option<String> {
-    UnifiedAddress::from_receivers(None, Some(*addr), None).map(|ua| ua.encode(network))
+    UnifiedAddress::from_receivers(None, Some(*addr), None, None, None).map(|ua| ua.encode(network))
+}
+
+/// Decode a claimed recipient address into its per-pool receiver encodings, matching
+/// exactly how `pczt_describe` encodes output recipients. Lets the signing dialog verify
+/// the site's claimed recipient against the PCZT's real outputs instead of trusting a
+/// plain string. Returns a JSON object `{orchard, sapling, transparent}` (null if absent).
+#[wasm_bindgen]
+pub fn decode_address_receivers(network: &str, address: &str) -> Result<String, Error> {
+    let net = Network::from_str(network)?;
+    let addr = Address::decode(&net, address)
+        .ok_or_else(|| Error::KeyDecoding("could not decode recipient address".into()))?;
+    let (orchard, sapling, transparent) = match addr {
+        Address::Unified(ua) => (
+            ua.orchard().and_then(|a| encode_orchard(&net, a)),
+            ua.sapling().and_then(|a| encode_sapling(&net, a)),
+            ua.transparent().map(|a| a.encode(&net)),
+        ),
+        Address::Sapling(a) => (None, encode_sapling(&net, &a), None),
+        Address::Transparent(a) => (None, None, Some(a.encode(&net))),
+        _ => (None, None, None),
+    };
+    // Address encodings are bech32m/base58 (no quotes or backslashes), so direct
+    // interpolation is safe.
+    let field = |v: &Option<String>| match v {
+        Some(s) => format!("\"{s}\""),
+        None => "null".to_string(),
+    };
+    Ok(format!(
+        "{{\"orchard\":{},\"sapling\":{},\"transparent\":{}}}",
+        field(&orchard),
+        field(&sapling),
+        field(&transparent),
+    ))
 }
 
 /// True iff this Orchard spend is recoverable under `ofvk`.
@@ -414,7 +448,7 @@ fn analyze(
     let ofvk = ufvk.orchard();
     let sdfvk = ufvk.sapling();
     let sfvk = sdfvk.map(|dfvk| dfvk.fvk());
-    let tfvk = ufvk.transparent();
+    let tfvk = ufvk.p2pkh();
 
     let mut outputs: Vec<PcztOutputSummary> = Vec::new();
     let mut total_in: u64 = 0;
@@ -598,7 +632,9 @@ fn analyze(
                     // `is_change` here already means "pays one of our transparent
                     // keys", i.e. ours.
                     is_ours: is_change,
-                    verified: true,
+                    // Unrecoverable (non-standard) script has no displayable recipient,
+                    // so mark it unverified for pczt_validate_inner to refuse.
+                    verified: addr.is_some(),
                 });
             }
             Ok(())

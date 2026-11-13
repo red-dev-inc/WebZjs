@@ -10,6 +10,8 @@ pub enum Error {
     Derivation(#[from] zcash_keys::keys::DerivationError),
     #[error("Error attempting to decode key: {0}")]
     KeyDecoding(String),
+    #[error("Error attempting to encode key: {0}")]
+    KeyEncoding(String),
     #[error("Failed to sign Pczt: {0}")]
     PcztSign(String),
     #[error("Failed to describe Pczt: {0}")]
@@ -20,6 +22,10 @@ pub enum Error {
     SeedFingerprint,
     #[error("Failed to derive transparent address from UFVK")]
     TransparentAddressDerivation,
+    #[error("Failed to derive unified address from UFVK")]
+    AddressDerivation,
+    #[error("BIP-39 error: {0}")]
+    Bip39(String),
 }
 
 impl From<Error> for JsValue {

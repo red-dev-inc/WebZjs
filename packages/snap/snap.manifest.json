@@ -1,5 +1,5 @@
 {
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "WebZjs Snap for Zcash wallet",
   "proposedName": "Zcash WebZjs Wallet",
   "repository": {
@@ -7,7 +7,7 @@
     "url": "https://github.com/ZcashCommunityGrants/WebZjs.git"
   },
   "source": {
-    "shasum": "omUMy4M7iFO0+mqcG6rGv5/bnDvRbhZaC+qRvX0D22I=",
+    "shasum": "0Wg814D7LYNA4RSaSfSgzim7mPatDJo4xf+HPY+rqFo=",
     "location": {
       "npm": {
         "filePath": "dist/bundle.js",

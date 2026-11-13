@@ -214,7 +214,7 @@ impl WebWallet {
         birthday_height: Option<u32>,
     ) -> Result<u32, Error> {
         let ufvk = UnifiedFullViewingKey::decode(&self.inner.network, encoded_ufvk)
-            .map_err(Error::KeyParse)?;
+            .map_err(|e| Error::KeyParse(e.to_string()))?;
         let derivation = Some(Zip32Derivation::new(
             seed_fingerprint.into(),
             zip32::AccountId::try_from(account_hd_index)?,
@@ -251,7 +251,7 @@ impl WebWallet {
         birthday_height: Option<u32>,
     ) -> Result<u32, Error> {
         let ufvk = UnifiedFullViewingKey::decode(&self.inner.network, encoded_ufvk)
-            .map_err(Error::KeyParse)?;
+            .map_err(|e| Error::KeyParse(e.to_string()))?;
 
         self.inner
             .import_ufvk(
@@ -504,6 +504,17 @@ impl WebWallet {
             .map(Into::into)
     }
 
+    /// Creates a PCZT that sweeps the account's entire spendable shielded balance to
+    /// `to_address` with an exact fee and no change (the v1 → v2 migration move). Fails if
+    /// any shielded note is not yet spendable; transparent funds must be shielded first.
+    pub async fn pczt_sweep(&self, account_id: u32, to_address: String) -> Result<Pczt, Error> {
+        let to_address = ZcashAddress::try_from_encoded(&to_address)?;
+        self.inner
+            .pczt_sweep(AccountId::from(account_id), to_address)
+            .await
+            .map(Into::into)
+    }
+
     /// Creates and inserts proofs for a PCZT.
     ///
     /// If there are Sapling spends, a ProofGenerationKey needs to be supplied. It can be derived from the UFVK.
@@ -524,7 +535,9 @@ impl WebWallet {
             .map(Into::into)
     }
 
-    pub async fn pczt_send(&self, pczt: Pczt) -> Result<(), Error> {
+    /// Broadcasts the transaction in `pczt` and returns its txid (raw-byte hex), so the
+    /// caller can poll `get_transaction_history` for confirmation.
+    pub async fn pczt_send(&self, pczt: Pczt) -> Result<String, Error> {
         self.inner.pczt_send(pczt.into()).await
     }
 
@@ -672,6 +685,8 @@ pub struct WalletSummary {
     // scan_progress: Option<Ratio<u64>>,
     pub next_sapling_subtree_index: u64,
     pub next_orchard_subtree_index: u64,
+    #[serde(default)]
+    pub next_ironwood_subtree_index: u64,
 }
 
 #[wasm_bindgen]
@@ -682,28 +697,7 @@ impl WalletSummary {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AccountBalance {
-    pub sapling_balance: u64,
-    pub orchard_balance: u64,
-    pub unshielded_balance: u64,
-    /// Change from sent transactions waiting for mining confirmation
-    pub pending_change: u64,
-    /// Received notes waiting for required confirmations to become spendable
-    pub pending_spendable: u64,
-}
-
-impl From<zcash_client_backend::data_api::AccountBalance> for AccountBalance {
-    fn from(balance: zcash_client_backend::data_api::AccountBalance) -> Self {
-        AccountBalance {
-            sapling_balance: balance.sapling_balance().spendable_value().into(),
-            orchard_balance: balance.orchard_balance().spendable_value().into(),
-            unshielded_balance: balance.unshielded_balance().spendable_value().into(),
-            pending_change: balance.change_pending_confirmation().into(),
-            pending_spendable: balance.value_pending_spendability().into(),
-        }
-    }
-}
+pub use crate::balance::AccountBalance;
 
 impl<T> From<zcash_client_backend::data_api::WalletSummary<T>> for WalletSummary
 where
@@ -724,6 +718,7 @@ where
             fully_scanned_height: summary.fully_scanned_height().into(),
             next_sapling_subtree_index: summary.next_sapling_subtree_index(),
             next_orchard_subtree_index: summary.next_orchard_subtree_index(),
+            next_ironwood_subtree_index: summary.next_ironwood_subtree_index(),
         }
     }
 }
