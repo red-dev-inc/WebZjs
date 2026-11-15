@@ -37,3 +37,16 @@ jobs:
         with:
           command: clippy
           args: --all --lib -- -D warnings -A deprecated -A unused-variables -A unused-imports
+
+  vendored-tonic-web-wasm-client:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust-toolchain
+
+      # The vendored crate is excluded from the workspace, so `--all` does not reach it.
+      - name: Test the vendored tonic-web-wasm-client
+        run: cargo test --locked -p tonic-web-wasm-client

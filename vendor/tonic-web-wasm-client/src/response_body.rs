@@ -97,10 +97,10 @@ pub enum ReadState {
 }
 
 impl ReadState {
+    /// The body is complete only once the trailer frame has been read in full. Seeing the trailer
+    /// flag is not enough: the rest of the frame may still be on its way, or never arrive.
     fn finished_data(&self) -> bool {
-        matches!(self, ReadState::TrailerLength)
-            || matches!(self, ReadState::Trailer(_))
-            || matches!(self, ReadState::Done)
+        matches!(self, ReadState::Done)
     }
 }
 
@@ -130,8 +130,20 @@ impl ResponseBody {
         let body_stream =
             wasm_streams::ReadableStream::from_raw(body_stream.unchecked_into()).into_stream();
 
+        Self::from_body_stream(
+            BodyStream::new(body_stream, abort),
+            content_type,
+            trailers_only,
+        )
+    }
+
+    fn from_body_stream(
+        body_stream: BodyStream,
+        content_type: &str,
+        trailers_only: bool,
+    ) -> Result<Self, Error> {
         Ok(Self {
-            body_stream: BodyStream::new(body_stream, abort),
+            body_stream,
             buf: EncodedBytes::new(content_type)?,
             incomplete_data: BytesMut::new(),
             data: None,
@@ -284,9 +296,13 @@ impl Body for ResponseBody {
             return Poll::Ready(Some(Ok(http_body::Frame::data(data.freeze()))));
         }
 
-        // If reading data is finished return `None`
+        // Once the body is complete, hand the trailers to the caller (once), then end
         if self.state.finished_data() {
-            return Poll::Ready(None);
+            return Poll::Ready(
+                self.trailer
+                    .take()
+                    .map(|t| Ok(http_body::Frame::trailers(t))),
+            );
         }
 
         loop {
@@ -305,8 +321,12 @@ impl Body for ResponseBody {
                 let data = self.data.take().unwrap();
                 return Poll::Ready(Some(Ok(http_body::Frame::data(data.freeze()))));
             } else if self.state.finished_data() {
-                // If we finished reading data continue return `None`
-                return Poll::Ready(None);
+                // The body is complete: hand the trailers to the caller (once), then end
+                return Poll::Ready(
+                    self.trailer
+                        .take()
+                        .map(|t| Ok(http_body::Frame::trailers(t))),
+                );
             } else if self.finished_stream {
                 // A trailers-only response carries its status in the HTTP headers and has an empty
                 // body: the stream legitimately ends before any frame header.
@@ -342,3 +362,6 @@ impl Default for ResponseBody {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

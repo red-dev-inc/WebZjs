@@ -35,6 +35,15 @@ impl BodyStream {
         }
     }
 
+    /// A body made of in-memory chunks, for unit tests that run without a browser.
+    #[cfg(test)]
+    pub(crate) fn from_chunks(chunks: Vec<Bytes>) -> Self {
+        Self {
+            body_stream: Box::pin(futures_util::stream::iter(chunks.into_iter().map(Ok))),
+            _abort: None,
+        }
+    }
+
     pub fn empty() -> Self {
         let body_stream = empty();
 
