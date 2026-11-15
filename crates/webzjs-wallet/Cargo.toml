@@ -71,8 +71,8 @@ bip32.workspace = true
 prost = { version = "0.14", default-features = false }
 tonic = { version = "0.14", default-features = false, features = ["codegen"] }
 
-# Used in Native tests
-tokio.workspace = true
+# "sync" for the mpsc/oneshot channels of the shared sync worker; the rest is used in native tests
+tokio = { workspace = true, features = ["sync"] }
 zcash_client_sqlite = { workspace = true, optional = true }
 
 getrandom = { workspace = true, features = ["js"] }
