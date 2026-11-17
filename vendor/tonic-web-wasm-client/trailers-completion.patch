@@ -1,0 +1,195 @@
+diff --git a/src/body_stream.rs b/src/body_stream.rs
+index 55a4811..dcd8c8a 100644
+--- a/src/body_stream.rs
++++ b/src/body_stream.rs
+@@ -38,8 +38,13 @@ impl BodyStream {
+     /// A body made of in-memory chunks, for unit tests that run without a browser.
+     #[cfg(test)]
+     pub(crate) fn from_chunks(chunks: Vec<Bytes>) -> Self {
++        Self::from_stream(futures_util::stream::iter(chunks.into_iter().map(Ok)))
++    }
++
++    #[cfg(test)]
++    pub(crate) fn from_stream(stream: impl Stream<Item = Result<Bytes, Error>> + 'static) -> Self {
+         Self {
+-            body_stream: Box::pin(futures_util::stream::iter(chunks.into_iter().map(Ok))),
++            body_stream: Box::pin(stream),
+             _abort: None,
+         }
+     }
+diff --git a/src/response_body.rs b/src/response_body.rs
+index 282827c..9deaf0f 100644
+--- a/src/response_body.rs
++++ b/src/response_body.rs
+@@ -93,17 +93,10 @@ pub enum ReadState {
+     Data(u32),
+     TrailerLength,
+     Trailer(u32),
++    AwaitEof,
+     Done,
+ }
+
+-impl ReadState {
+-    /// The body is complete only once the trailer frame has been read in full. Seeing the trailer
+-    /// flag is not enough: the rest of the frame may still be on its way, or never arrive.
+-    fn finished_data(&self) -> bool {
+-        matches!(self, ReadState::Done)
+-    }
+-}
+-
+ /// Type to handle HTTP response
+ #[pin_project]
+ pub struct ResponseBody {
+@@ -220,15 +213,9 @@ impl ResponseBody {
+                     } else {
+                         this.incomplete_data.unsplit(this.buf.take(data_length));
+
+-                        let new_data = this.incomplete_data.split();
+-
+-                        if let Some(data) = this.data {
+-                            data.unsplit(new_data);
+-                        } else {
+-                            *this.data = Some(new_data);
+-                        }
+-
++                        *this.data = Some(this.incomplete_data.split());
+                         *this.state = ReadState::CompressionFlag;
++                        return Ok(());
+                     }
+                 }
+                 ReadState::TrailerLength => {
+@@ -256,8 +243,14 @@ impl ResponseBody {
+                             match httparse::parse_headers(&trailer_bytes, &mut trailers_buf)
+                                 .map_err(|_| Error::HeaderParsingError)?
+                             {
+-                                Status::Complete((_, headers)) => Ok(headers),
+-                                Status::Partial => Err(Error::HeaderParsingError),
++                                // Accept an existing terminator or the appended newline, but
++                                // never ignore another header after a blank line.
++                                Status::Complete((end, headers))
++                                    if end >= trailer_bytes.len() - 1 =>
++                                {
++                                    Ok(headers)
++                                }
++                                _ => Err(Error::HeaderParsingError),
+                             }?;
+
+                         let mut trailers = HeaderMap::with_capacity(parsed_trailers.len());
+@@ -265,14 +258,33 @@ impl ResponseBody {
+                         for parsed_trailer in parsed_trailers {
+                             let header_name =
+                                 HeaderName::from_bytes(parsed_trailer.name.as_bytes())?;
++                            if header_name == "grpc-status" {
++                                let status = parsed_trailer.value;
++                                if trailers.contains_key(&header_name)
++                                    || status.is_empty()
++                                    || !status.iter().all(u8::is_ascii_digit)
++                                    || (status.len() > 1 && status[0] == b'0')
++                                {
++                                    return Err(Error::MalformedResponse);
++                                }
++                                // tonic maps unfamiliar decimal codes to UNKNOWN without
++                                // parsing an integer. Leave the value and metadata intact.
++                            }
+                             let header_value = HeaderValue::from_bytes(parsed_trailer.value)?;
+                             trailers.insert(header_name, header_value);
+                         }
+-
++                        if !trailers.contains_key("grpc-status") {
++                            return Err(Error::MalformedResponse);
++                        }
+                         *this.trailer = Some(trailers);
+-
+-                        *this.state = ReadState::Done;
++                        *this.state = ReadState::AwaitEof;
++                    }
++                }
++                ReadState::AwaitEof => {
++                    if !this.buf.is_empty() || !this.buf.raw_buf.is_empty() {
++                        return Err(Error::MalformedResponse);
+                     }
++                    return Ok(());
+                 }
+                 ReadState::Done => return Ok(()),
+             }
+@@ -289,50 +301,36 @@ impl Body for ResponseBody {
+         mut self: Pin<&mut Self>,
+         cx: &mut Context<'_>,
+     ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+-        // Check if there's already some data in buffer and return that
+-        if self.data.is_some() {
+-            let data = self.data.take().unwrap();
+-
+-            return Poll::Ready(Some(Ok(http_body::Frame::data(data.freeze()))));
+-        }
+-
+-        // Once the body is complete, hand the trailers to the caller (once), then end
+-        if self.state.finished_data() {
+-            return Poll::Ready(
+-                self.trailer
+-                    .take()
+-                    .map(|t| Ok(http_body::Frame::trailers(t))),
+-            );
++        if self.state == ReadState::Done {
++            return Poll::Ready(None);
+         }
+
+         loop {
+-            // Read bytes from stream
+-            if let Err(e) = ready!(self.as_mut().read_stream(cx)) {
+-                return Poll::Ready(Some(Err(e)));
+-            }
+-
+-            // Step the state machine
++            // Drain buffered frames before waiting for the next chunk or EOF.
+             if let Err(e) = self.as_mut().step() {
++                self.state = ReadState::Done;
++                self.trailer = None;
+                 return Poll::Ready(Some(Err(e)));
+             }
+
+-            if self.data.is_some() {
+-                // If data is available in buffer, return that
+-                let data = self.data.take().unwrap();
++            if let Some(data) = self.data.take() {
+                 return Poll::Ready(Some(Ok(http_body::Frame::data(data.freeze()))));
+-            } else if self.state.finished_data() {
+-                // The body is complete: hand the trailers to the caller (once), then end
+-                return Poll::Ready(
+-                    self.trailer
+-                        .take()
+-                        .map(|t| Ok(http_body::Frame::trailers(t))),
+-                );
+-            } else if self.finished_stream {
++            }
++            if self.finished_stream {
++                let state = std::mem::replace(&mut self.state, ReadState::Done);
++                if state == ReadState::AwaitEof {
++                    return Poll::Ready(
++                        self.trailer
++                            .take()
++                            .map(|t| Ok(http_body::Frame::trailers(t))),
++                    );
++                }
+                 // A trailers-only response carries its status in the HTTP headers and has an empty
+                 // body: the stream legitimately ends before any frame header.
+                 if self.trailers_only
+-                    && self.state == ReadState::CompressionFlag
++                    && state == ReadState::CompressionFlag
+                     && self.buf.is_empty()
++                    && self.buf.raw_buf.is_empty()
+                     && self.incomplete_data.is_empty()
+                 {
+                     return Poll::Ready(None);
+@@ -340,6 +338,11 @@ impl Body for ResponseBody {
+                 // If stream is finished but data is not finished return error
+                 return Poll::Ready(Some(Err(Error::MalformedResponse)));
+             }
++            if let Err(e) = ready!(self.as_mut().read_stream(cx)) {
++                self.state = ReadState::Done;
++                self.trailer = None;
++                return Poll::Ready(Some(Err(e)));
++            }
+         }
+     }
+ }
