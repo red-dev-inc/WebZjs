@@ -22,6 +22,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use subtle::ConditionallySelectable;
 use tokio::sync::RwLock;
@@ -52,7 +53,7 @@ use zcash_primitives::transaction::TxId;
 use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::ShieldedProtocol;
 
-use zcash_client_backend::sync::run;
+use zcash_client_backend::sync::{run_step, StepOptions};
 
 use zcash_protocol::consensus::BranchId;
 use zcash_protocol::consensus::Parameters;
@@ -60,7 +61,26 @@ use zcash_protocol::value::Zatoshis;
 use zip32;
 use zip32::fingerprint::SeedFingerprint;
 
-const BATCH_SIZE: u32 = 10000; // Smaller batches = shorter CPU bursts with I/O pauses between them
+/// Blocks fetched and scanned per batch. One `sync_step` scans exactly one batch (after verifying
+/// the few lookahead blocks above the max scanned height), so this also bounds how long a step holds
+/// the wallet write lock and how much block data is cached at once. Each step also costs a chain tip
+/// refresh, a UTXO refresh and a tree state fetch, so batches much smaller than this spend more time
+/// on that overhead than on scanning.
+const BATCH_SIZE: u32 = 10000;
+
+/// Source of the per-process part of [`Wallet::instance_id`].
+static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
+
+/// Builds a fresh instance id: a process-local counter plus a random suffix, so ids from
+/// different page loads (where the counter restarts) still differ.
+fn next_instance_id() -> String {
+    let n = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
+    let mut suffix = [0u8; 4];
+    match getrandom::getrandom(&mut suffix) {
+        Ok(()) => format!("{}-{}", n, hex::encode(suffix)),
+        Err(_) => n.to_string(),
+    }
+}
 
 /// constant that signals what's the minimum transparent balance for proposing a
 /// shielding transaction
@@ -96,6 +116,10 @@ pub struct Wallet<W, T> {
     pub(crate) target_note_count: usize,
     /// Note management: the minimum allowed value for split change amounts
     pub(crate) min_split_output_value: u64,
+    /// Identifies this wallet instance (and its clones) for the lifetime of the process
+    instance_id: String,
+    /// Set by [`Wallet::close`]; shared by every clone of this instance
+    closed: Arc<AtomicBool>,
 }
 
 impl<W, T: Clone> Clone for Wallet<W, T> {
@@ -107,13 +131,57 @@ impl<W, T: Clone> Clone for Wallet<W, T> {
             min_confirmations: self.min_confirmations,
             target_note_count: self.target_note_count,
             min_split_output_value: self.min_split_output_value,
+            instance_id: self.instance_id.clone(),
+            closed: self.closed.clone(),
+        }
+    }
+}
+
+impl<W, T> Wallet<W, T> {
+    /// The id of this wallet instance.
+    ///
+    /// Every call to [`Wallet::new`] produces a new id; clones share the id of the instance they
+    /// were cloned from. Use it to tell whether a result (for example from a sync step) belongs to
+    /// the wallet currently in use after the wallet has been reloaded.
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    /// Close this instance and all of its clones.
+    ///
+    /// After this, every method that reads or writes wallet state (`sync`, `sync_step`,
+    /// `db_to_bytes`, account creation, transaction building and sending) fails with
+    /// [`Error::InstanceClosed`]. A sync step that is already running finishes its current batch
+    /// and then the next step is refused, so a caller driving `sync_step` in a loop stops promptly.
+    /// Closing is idempotent and cannot be undone; construct a new wallet instead.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether [`Wallet::close`] has been called on this instance or one of its clones.
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    /// Returns [`Error::InstanceClosed`] if the instance has been closed.
+    fn ensure_open(&self) -> Result<(), Error> {
+        if self.is_closed() {
+            Err(Error::InstanceClosed)
+        } else {
+            Ok(())
         }
     }
 }
 
 impl<P: Parameters, T> Wallet<MemoryWalletDb<P>, T> {
-    // Encodes the MemoryWallet into protobuf bytes
+    /// Encodes the memory wallet database to bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InstanceClosed`] if the instance has been closed, or a serialization
+    /// error from the database.
     pub async fn db_to_bytes(&self) -> Result<Vec<u8>, Error> {
+        self.ensure_open()?;
         let mut memory_wallet_bytes = Vec::new();
         self.db.read().await.encode(&mut memory_wallet_bytes)?;
         Ok(memory_wallet_bytes)
@@ -167,6 +235,8 @@ where
             min_confirmations,
             target_note_count: 4,
             min_split_output_value: 10000000,
+            instance_id: next_instance_id(),
+            closed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -185,6 +255,7 @@ where
         birthday_height: Option<u32>,
         key_source: Option<&str>,
     ) -> Result<AccountId, Error> {
+        self.ensure_open()?;
         // decode the mnemonic and derive the first account
         let (usk, seed_fp) = usk_from_seed_str(seed_phrase, account_hd_index, &self.network)?;
         let ufvk = usk.to_unified_full_viewing_key();
@@ -214,6 +285,7 @@ where
         birthday_height: Option<u32>,
         key_source: Option<&str>,
     ) -> Result<AccountId, Error> {
+        self.ensure_open()?;
         self.import_account_ufvk(account_name, ufvk, birthday_height, purpose, key_source)
             .await
     }
@@ -276,21 +348,71 @@ where
         })?)
     }
 
+    /// Synchronize the wallet with the chain until no scan work remains.
+    ///
+    /// This is [`Wallet::sync_step`] in a loop: the wallet write lock is released between
+    /// batches, so other wallet methods can run between them, and closing the instance stops the
+    /// loop at the next batch boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InstanceClosed`] if the instance is (or becomes) closed, or any error of
+    /// [`Wallet::sync_step`].
     pub async fn sync(&self) -> Result<(), Error> {
+        let mut first = true;
+        while self.sync_step(first).await? {
+            first = false;
+        }
+        Ok(())
+    }
+
+    /// Perform one bounded step of the sync: refresh the chain tip, then fetch and scan at most
+    /// one batch of [`BATCH_SIZE`] blocks.
+    ///
+    /// The wallet write lock is held only for the duration of the step and released on return,
+    /// so the caller can persist the wallet (`db_to_bytes`), serve reads, or stop between steps.
+    /// Each return point leaves the wallet in a state a later step, or a later page load restored
+    /// from `db_to_bytes`, can resume from.
+    ///
+    /// # Arguments
+    ///
+    /// * `first` - `true` for the first step of a sync (and after a long pause): the subtree roots
+    ///   are refreshed from the server before scanning. Pass `false` on later steps to save the
+    ///   round trip.
+    ///
+    /// # Returns
+    ///
+    /// `true` if more work remains and the caller should call `sync_step` again, `false` once the
+    /// wallet reports nothing left to scan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InstanceClosed`] if the instance has been closed (checked before and
+    /// after waiting for the write lock), or [`Error::Sync`] for server, cache, scanning and
+    /// wallet errors.
+    pub async fn sync_step(&self, first: bool) -> Result<bool, Error> {
+        self.ensure_open()?;
         let mut client = self.client.clone();
-        // TODO: This should be held in the Wallet struct so we can download in parallel
+        // Scanned blocks are deleted from the cache before a step returns, so a cache per step
+        // carries nothing over and holds at most one batch of blocks.
         let db_cache = MemBlockCache::new();
 
         let mut db = self.db.write().await;
-        run(
+        // The instance may have been closed while we waited for the lock.
+        self.ensure_open()?;
+        let more = run_step(
             &mut client,
-            &self.network.clone(),
+            &self.network,
             &db_cache,
             &mut *db,
             BATCH_SIZE,
+            StepOptions {
+                refresh_subtree_roots: first,
+                max_batches: 1,
+            },
         )
-        .await
-        .map_err(Into::into)
+        .await?;
+        Ok(more)
     }
 
     pub async fn get_wallet_summary(&self) -> Result<Option<WalletSummary<AccountId>>, Error> {
@@ -310,6 +432,7 @@ where
         to_address: ZcashAddress,
         value: u64,
     ) -> Result<Proposal<StandardFeeRule, NoteRef>, Error> {
+        self.ensure_open()?;
         let input_selector = GreedyInputSelector::new();
 
         let change_strategy = MultiOutputChangeStrategy::new(
@@ -368,6 +491,7 @@ where
         proposal: Proposal<StandardFeeRule, NoteRef>,
         usk: &UnifiedSpendingKey,
     ) -> Result<NonEmpty<TxId>, Error> {
+        self.ensure_open()?;
         let prover = LocalTxProver::bundled();
         let mut db = self.db.write().await;
         let transactions = create_proposed_transactions::<
@@ -394,6 +518,7 @@ where
     }
 
     pub async fn send_authorized_transactions(&self, txids: &NonEmpty<TxId>) -> Result<(), Error> {
+        self.ensure_open()?;
         let mut client = self.client.clone();
         for txid in txids.iter() {
             let (txid, raw_tx) = self
@@ -450,6 +575,7 @@ where
         to_address: ZcashAddress,
         value: u64,
     ) -> Result<(), Error> {
+        self.ensure_open()?;
         let (usk, _) = usk_from_seed_str(seed_phrase, account_hd_index, &self.network)?;
         let proposal = self
             .propose_transfer(from_account_id, to_address, value)
@@ -463,6 +589,7 @@ where
     }
 
     pub async fn pczt_shield(&self, account_id: AccountId) -> Result<Pczt, Error> {
+        self.ensure_open()?;
         tracing::info!("pczt_shield: Starting for account {:?}", account_id);
 
         // Ensure wallet is synced to latest block before creating transaction
@@ -599,6 +726,7 @@ where
         to_address: ZcashAddress,
         value: u64,
     ) -> Result<Pczt, Error> {
+        self.ensure_open()?;
         // Ensure wallet is synced before creating transaction to prevent expiry errors
         let mut client = self.client.clone();
         let chain_tip: u32 = client
@@ -693,6 +821,7 @@ where
         pczt: Pczt,
         sapling_proof_gen_key: Option<ProofGenerationKey>,
     ) -> Result<Pczt, Error> {
+        self.ensure_open()?;
         // Add Sapling proof generation key.
         // TODO: Check to see if there is any sapling in here in the first place
         let pczt = if let Some(sapling_proof_gen_key) = sapling_proof_gen_key {
@@ -745,11 +874,15 @@ where
         };
 
         let prover = LocalTxProver::bundled();
+        // The Ironwood bundle (NU6.3) is a second Orchard-protocol bundle and is proven with the
+        // same circuit; without its proof, extraction fails on any payment to a shielded
+        // address, since those are delivered through Ironwood after NU6.3.
+        let orchard_pk = orchard::circuit::ProvingKey::build(orchard_circuit_version);
         let pczt = Prover::new(pczt)
-            .create_orchard_proof(&orchard::circuit::ProvingKey::build(
-                orchard_circuit_version,
-            ))
+            .create_orchard_proof(&orchard_pk)
             .map_err(|e| Error::PcztProve(format!("Failed to create Orchard proof: {e:?}")))?
+            .create_ironwood_proof(&orchard_pk)
+            .map_err(|e| Error::PcztProve(format!("Failed to create Ironwood proof: {e:?}")))?
             .create_sapling_proofs(&prover, &prover)
             .map_err(|e| Error::PcztProve(format!("Failed to create Sapling proofs: {e:?}")))?
             .finish();
@@ -757,6 +890,7 @@ where
     }
 
     pub async fn pczt_send(&self, pczt: Pczt) -> Result<(), Error> {
+        self.ensure_open()?;
         // Verify the wallet is sufficiently synced before sending
         // The network only accepts anchors within the last 100 blocks
         let mut client = self.client.clone();
@@ -826,6 +960,7 @@ where
     }
 
     pub fn pczt_combine(&self, pczts: Vec<Pczt>) -> Result<Pczt, Error> {
+        self.ensure_open()?;
         Combiner::new(pczts)
             .combine()
             .map_err(|e| Error::PcztCombine(format!("Failed to combine PCZT: {e:?}")))

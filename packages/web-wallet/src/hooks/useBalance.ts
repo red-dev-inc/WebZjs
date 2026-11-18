@@ -3,7 +3,7 @@ import { useWebZjsContext } from '../context/WebzjsContext';
 import { useMetaMaskContext } from '../context/MetamaskContext';
 
 type BalanceType = {
-  /** Confirmed shielded balance (sapling + orchard) */
+  /** Confirmed shielded balance (sapling + orchard + ironwood) */
   shieldedBalance: number;
   /** Confirmed unshielded (transparent) balance */
   unshieldedBalance: number;
@@ -13,6 +13,8 @@ type BalanceType = {
   spendableBalance: number;
   saplingBalance: number;
   orchardBalance: number;
+  /** Ironwood pool (NU6.3): where payments to shielded addresses land after the upgrade */
+  ironwoodBalance: number;
   /** Change from sent transactions waiting for mining confirmation */
   pendingChange: number;
   /** Received notes waiting for required confirmations to become spendable */
@@ -52,11 +54,13 @@ const useBalance = () => {
     let livePendingSpendable = 0;
     let liveSapling = 0;
     let liveOrchard = 0;
+    let liveIronwood = 0;
 
     if (activeBalanceReport) {
       liveSapling = activeBalanceReport[1].sapling_balance || 0;
       liveOrchard = activeBalanceReport[1].orchard_balance || 0;
-      confirmedShielded = liveSapling + liveOrchard;
+      liveIronwood = activeBalanceReport[1].ironwood_balance || 0;
+      confirmedShielded = liveSapling + liveOrchard + liveIronwood;
       confirmedUnshielded = activeBalanceReport[1].unshielded_balance || 0;
       livePendingChange = activeBalanceReport[1].pending_change || 0;
       livePendingSpendable = activeBalanceReport[1].pending_spendable || 0;
@@ -80,6 +84,7 @@ const useBalance = () => {
         spendableBalance: confirmedTotal,
         saplingBalance: liveSapling,
         orchardBalance: liveOrchard,
+        ironwoodBalance: liveIronwood,
         pendingChange: livePendingChange,
         pendingSpendable: livePendingSpendable,
         totalPending: pendingTotal,
@@ -101,6 +106,7 @@ const useBalance = () => {
         spendableBalance: cachedTotal, // cache is from last known state
         saplingBalance: 0,
         orchardBalance: 0,
+        ironwoodBalance: 0,
         pendingChange: livePendingChange,
         pendingSpendable: livePendingSpendable,
         totalPending: pendingTotal,
@@ -121,6 +127,7 @@ const useBalance = () => {
         spendableBalance: confirmedTotal,
         saplingBalance: liveSapling,
         orchardBalance: liveOrchard,
+        ironwoodBalance: liveIronwood,
         pendingChange: livePendingChange,
         pendingSpendable: livePendingSpendable,
         totalPending: pendingTotal,
@@ -140,6 +147,7 @@ const useBalance = () => {
       spendableBalance: 0,
       saplingBalance: 0,
       orchardBalance: 0,
+      ironwoodBalance: 0,
       pendingChange: 0,
       pendingSpendable: 0,
       totalPending: 0,

@@ -19,7 +19,7 @@ function AccountSummary() {
   const { pendingTxs } = usePendingTransactions();
   const { state } = useWebZjsContext();
   const { snapState } = useMetaMaskContext();
-  const { fullResync } = useWebZjsActions();
+  const { fullResync, discardResync } = useWebZjsActions();
 
   const BalanceCards: BalanceCard[] = [
     {
@@ -95,6 +95,7 @@ function AccountSummary() {
         state={state}
         syncedFrom={snapState?.webWalletSyncStartBlock}
         onFullResync={fullResync}
+        onDiscardResync={discardResync}
       />
     </div>
   );
