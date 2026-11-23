@@ -16,19 +16,28 @@ wasm-opt = ["-O4", "-O4"]
 [features]
 default = ["native", "multicore"]
 
-multicore = ["zcash_proofs/multicore", "zcash_primitives/multicore", "zcash_client_memory/multicore"]
+multicore = [
+    "zcash_proofs/multicore",
+    "zcash_primitives/multicore",
+    "zcash_client_memory/multicore",
+    "webzjs-keys/multicore",
+    "webzjs-common/multicore",
+]
 
 # WASM specific features
 wasm = ["console_error_panic_hook", "dep:tracing-web"]
-wasm-parallel = ["wasm", "wasm-bindgen-rayon", "multicore"]
+wasm-parallel = ["wasm", "wasm-bindgen-rayon", "dep:wasm_thread", "dep:rayon", "multicore"]
+# Single-threaded wasm build: no SharedArrayBuffer, no wasm_thread, no rayon pool, so the page needs no
+# COOP/COEP headers. Build with `just build-wallet-single`. Mutually exclusive with `wasm-parallel`.
+no-threads = ["wasm"]
 native = ["tonic/channel", "tonic/gzip", "tonic/tls-webpki-roots", "tokio/macros", "tokio/rt", "tokio/rt-multi-thread"]
 sqlite-db = ["dep:zcash_client_sqlite"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
-no-bundler = ["wasm-bindgen-rayon?/no-bundler", "wasm_thread/no-bundler"]
+no-bundler = ["wasm-bindgen-rayon?/no-bundler", "wasm_thread?/no-bundler"]
 
 [dependencies]
-webzjs-common = { path = "../webzjs-common" }
-webzjs-keys = { path = "../webzjs-keys" }
+webzjs-common = { path = "../webzjs-common", default-features = false }
+webzjs-keys = { path = "../webzjs-keys", default-features = false }
 ## Web dependencies
 wasm-bindgen.workspace = true
 js-sys.workspace = true
@@ -60,7 +69,7 @@ zcash_client_memory = { workspace = true, features = ["orchard", "transparent-in
 zcash_primitives = { workspace = true }
 zcash_address = { workspace = true }
 zcash_protocol = { workspace = true, default-features = false }
-zcash_proofs = { workspace = true, default-features = false, features = ["bundled-prover", "multicore"] }
+zcash_proofs = { workspace = true, default-features = false, features = ["bundled-prover"] }
 zip321 = { workspace = true }
 zip32 = { workspace = true }
 pczt = { workspace = true, default-features = false, features = ["orchard", "sapling", "transparent"] }
@@ -89,12 +98,12 @@ nonempty = "0.11"
 hex = "0.4.3"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 tracing = "0.1.40"
-rayon = { version = "1.8", features = ["web_spin_lock"] }
+rayon = { version = "1.8", features = ["web_spin_lock"], optional = true }
 subtle = "2.6.1"
 wasm_thread = { git = "https://github.com/ec2/wasm_thread", rev = "9e432077948d927d49373d1d039c23447d3648df", default-features = false, features = [
     "keep_worker_alive",
     "es_modules",
-] }
+], optional = true }
 
 wasm_sync = "0.1.2"
 http = { version = "1.1.0", default-features = false }

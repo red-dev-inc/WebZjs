@@ -3,6 +3,9 @@
 
 //! This is the top level documentation!
 
+#[cfg(all(feature = "no-threads", feature = "wasm-parallel"))]
+compile_error!("features `no-threads` and `wasm-parallel` are mutually exclusive");
+
 #[cfg(feature = "wasm")]
 pub mod bindgen;
 

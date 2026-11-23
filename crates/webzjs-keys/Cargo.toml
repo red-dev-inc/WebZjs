@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 wasm-opt = ["-O4", "-O4"]
 
 [dependencies]
-webzjs-common = { path = "../webzjs-common" }
+webzjs-common = { path = "../webzjs-common", default-features = false }
 
 js-sys.workspace = true
 thiserror.workspace = true
@@ -50,6 +50,10 @@ getrandom04.workspace = true
 rand10.workspace = true
 
 [features]
+default = ["multicore"]
+# rayon-backed proving/scanning in zcash_primitives. Off in the `no-threads` wallet build.
+multicore = ["zcash_primitives/multicore", "webzjs-common/multicore"]
+
 # Exposes `build_owned_demo_pczts` (src/demo_pczt.rs) — used only by the PoC demo
 # to construct per-pool sample PCZTs attributable to a given UFVK. Pulls the
 # transaction builders (`pczt/zcp-builder`) into the wasm build.

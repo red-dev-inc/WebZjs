@@ -74,6 +74,14 @@ This just script uses wasm-pack to build a web-ready copy of `webzjs-wallet` and
 just build
 ```
 
+#### Building without threads
+
+`just build-wallet-single` builds `webzjs-wallet` into `packages/webzjs-wallet-single` with the `no-threads` feature. That build needs no
+`SharedArrayBuffer`, so the page does not need the `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` headers. `sync` and
+`create_proposed_transactions` then run in the caller's context instead of a spawned worker, so host the `WebWallet` in your own dedicated
+Worker to keep the page responsive. `just check-no-threads [file.wasm]` checks the feature graph and, given a built `.wasm`, that it has
+no shared memory and no atomics. The default `just build` (`wasm wasm-parallel`) is unchanged. Note that `wasm` without `wasm-parallel` now behaves like `no-threads`: no `wasm_thread`, no `multicore`, and `sync` / `create_proposed_transactions` run in the caller's context (before, `wasm` alone still spawned `wasm_thread` workers). The generated package is named `@zcashcommunitygrants/webzjs-wallet-single` so both packages can live in the yarn workspace.
+
 #### Prerequisites
 
 [Install yarn](https://yarnpkg.com/getting-started/install)

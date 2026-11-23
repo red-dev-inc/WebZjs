@@ -37,3 +37,19 @@ jobs:
         with:
           command: clippy
           args: --all --lib -- -D warnings -A deprecated -A unused-variables -A unused-imports
+
+  no-threads:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust-toolchain
+
+      - name: Check the no-threads feature graph
+        run: ./scripts/check-no-threads.sh
+
+      - name: Type-check the no-threads flavour for wasm32
+        working-directory: crates/webzjs-wallet
+        run: RUSTFLAGS="" cargo check --lib --target wasm32-unknown-unknown --no-default-features --features "wasm no-threads"

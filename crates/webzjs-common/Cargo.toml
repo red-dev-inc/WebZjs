@@ -18,6 +18,10 @@ js-sys.workspace = true
 pczt = { workspace = true, default-features = false, features = ["orchard", "sapling", "transparent"] }
 serde-wasm-bindgen.workspace = true
 
+[features]
+default = ["multicore"]
+# rayon-backed proving/scanning in zcash_primitives. Off in the `no-threads` wallet build.
+multicore = ["zcash_primitives/multicore"]
 
 [lints]
 workspace = true
